@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Pincode – Quant Prep (Solo)</title>
+  <style>
+    :root{--bg:#0f1220;--panel:#151936;--accent:#7bd88f;--accent2:#8bd3ff;--text:#eef1ff;--muted:#a8b0d3;--danger:#ff6b6b;--warn:#ffd166}
+    *{box-sizing:border-box}html,body{height:100%}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--text);
+         background:radial-gradient(1000px 600px at 10% -10%, #1a1f45 0%, #0f1220 60%)}
+    header{position:sticky;top:0;z-index:5;backdrop-filter:blur(8px);background:rgb(15 18 32 / 72%);
+           border-bottom:1px solid #232955;padding:12px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    header h1{margin:0;font-size:18px;letter-spacing:.3px}
+    nav{display:flex;gap:8px;flex-wrap:wrap}
+    nav button{background:var(--panel);color:var(--text);border:1px solid #232955;padding:8px 12px;border-radius:10px;cursor:pointer}
+    nav button.active{border-color:var(--accent);box-shadow:0 0 0 2px rgb(123 216 143 / .25) inset}
+    main{padding:16px;max-width:1100px;margin:0 auto}
+    .card{background:linear-gradient(180deg,#161a3a 0%,#10142c 100%);border:1px solid #232955;border-radius:14px;padding:16px;margin:10px 0;box-shadow:0 8px 24px rgb(0 0 0 / .25)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .grid{display:grid;gap:12px}.grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+    input,select{width:100%;background:#0c1030;color:var(--text);border:1px solid #232955;padding:12px;border-radius:12px;outline:none;font-size:22px;text-align:center}
+    .btn{background:var(--accent);color:#0a1320;border:0;padding:12px 16px;border-radius:12px;cursor:pointer;font-weight:700}
+    .btn.ghost{background:transparent;color:var(--text);border:1px solid #2a316a}
+    .btn.danger{background:var(--danger);color:white}
+    .btn.huge{font-size:22px;padding:16px 20px;border-radius:16px;min-width:140px}
+    .muted{color:var(--muted)} .center{text-align:center}
+    .pill{padding:6px 10px;border:1px solid #2a316a;border-radius:999px;color:var(--muted)}
+    .timer{font-variant-numeric:tabular-nums}
+    .stim{font-size:54px;letter-spacing:3px;margin:10px 0 12px}
+    .cue{font-size:18px;color:var(--accent2);text-transform:uppercase;letter-spacing:1px}
+    table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+    th,td{padding:8px 10px;border-bottom:1px solid #232955}
+    tr:hover td{background:#101536}
+    .ok{color:var(--accent)}.bad{color:var(--danger)}.warn{color:var(--warn)}
+    .linklike{color:var(--accent2);cursor:pointer;text-decoration:underline}
+    .kbd{background:#0c1030;border:1px solid #232955;border-radius:6px;padding:2px 6px;font-size:12px}
+  </style>
+</head>
+<body>
+<header>
+  <h1>🔢 Pincode – Solo</h1>
+  <nav id="tabs"></nav>
+  <div style="margin-left:auto"></div>
+  <button class="btn ghost" id="exportJson">Export JSON</button>
+  <button class="btn ghost" id="exportCsv">Export CSV</button>
+  <button class="btn ghost" id="resetAll">Reset</button>
+</header>
+<main id="app"></main>
+
+<script>
+/************* Utils *************/
+const $=(s,e=document)=>e.querySelector(s);
+const $$=(s,e=document)=>[...e.querySelectorAll(s)];
+const now=()=>performance.now();
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const fmtMs=ms=>(ms/1000).toFixed(2)+"s";
+function dl(name,data,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();URL.revokeObjectURL(a.href);}
+const randCode = (len)=>{ let s=''; for(let i=0;i<len;i++) s+=Math.floor(Math.random()*10); return s; };
+
+/************* Storage (scoped) *************/
+const DBKEY='pc_db_v1';
+function load(key,def){try{return JSON.parse(localStorage.getItem(key))||structuredClone(def);}catch{ return structuredClone(def);}}
+function save(key,val){localStorage.setItem(key,JSON.stringify(val));}
+let DB=load(DBKEY,{sessions:[],highscores:{}});
+
+function pushSession(entry){
+  DB.sessions.push({...entry, date:new Date().toISOString()});
+  const sc=entry.stats?.score ?? entry.stats?.correct ?? 0;
+  if(!DB.highscores.pc || sc>DB.highscores.pc.score){
+    DB.highscores.pc={score:sc, when:new Date().toISOString(), detail:entry.stats};
+  }
+  save(DBKEY,DB);
+}
+
+/************* UI helpers *************/
+function card(html=''){ const d=document.createElement('div'); d.className='card'; d.innerHTML=html; return d; }
+function formRow(items){ const r=document.createElement('div'); r.className='row grid cols-2'; items.forEach(x=>r.appendChild(x)); return r; }
+function btn(label,fn,cls='btn'){ const b=document.createElement('button'); b.className=cls; b.textContent=label; 
+  // mobile: Keyboard offen lassen
+  b.onmousedown=(e)=>e.preventDefault();
+  b.onclick=fn; return b; }
+function numberField(label,min,max,step,val,onInput){
+  const w=document.createElement('div'); const id='n'+Math.random().toString(36).slice(2);
+  w.innerHTML=`<label for="${id}">${label}</label><input id="${id}" inputmode="numeric" type="number" min="${min}" max="${max}" step="${step}" value="${val}">`;
+  const el=$('input',w); el.addEventListener('input',e=>onInput(parseInt(e.target.value))); return w;
+}
+function selectField(label, opts, onCh, val){
+  const w=document.createElement('div'); const id='s'+Math.random().toString(36).slice(2);
+  w.innerHTML=`<label for="${id}">${label}</label><select id="${id}">${opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>`;
+  const el=$('select',w); el.value=val; el.addEventListener('change',e=>onCh(e.target.value)); return w;
+}
+function table(rows, headers, rawCols = []) {
+  const esc = s => (s ?? '').toString().replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+  const thead = `<thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>`;
+  const tbody = `<tbody>${
+    rows.map(r => `<tr>${
+      r.map((c, idx) => `<td>${rawCols.includes(idx) ? (c ?? '') : esc(c)}</td>`).join('')
+    }</tr>`).join('')
+  }</tbody>`;
+  return `<table>${thead}${tbody}</table>`;
+}
+
+/************* App-Shell *************/
+const tabs=[
+  {id:'pc', label:'Pincode', view:viewPC},
+  {id:'stats', label:'Statistik', view:viewStats},
+  {id:'settings', label:'Einstellungen', view:viewSettings},
+];
+let currentTab=localStorage.getItem('pc_tab')||'pc';
+function renderTabs(){ const nav=$('#tabs'); nav.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.textContent=t.label; b.className=currentTab===t.id?'active':''; b.onclick=()=>{currentTab=t.id; localStorage.setItem('pc_tab',currentTab); render();}; nav.appendChild(b);});}
+function render(){ renderTabs(); const root=$('#app'); root.innerHTML=''; (tabs.find(t=>t.id===currentTab)||tabs[0]).view(root); }
+
+/************* Export / Reset *************/
+$('#exportJson').onclick=()=>dl('pincode_stats_'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify(DB,null,2),'application/json');
+$('#exportCsv').onclick=()=>{
+  const rows=[["module","date","score","correct","wrong","skipped","rounds","len","secPerRound","detail_json"]];
+  for(const s of DB.sessions.filter(s=>s.module==='pc')){
+    rows.push(['pc',s.date,s.stats?.score??'',s.stats?.correct??'',s.stats?.wrong??'',s.stats?.skipped??'',s.settings?.rounds??'',
+               s.settings?.len??'',s.settings?.sec??'',JSON.stringify(s.perQuestion||[])]);
+  }
+  dl('pincode_stats_'+new Date().toISOString().slice(0,10)+'.csv',
+     rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n'),
+     'text/csv');
+};
+$('#resetAll').onclick=()=>{ if(confirm('Alle lokalen Daten löschen?')){ localStorage.removeItem(DBKEY); DB=load(DBKEY,{sessions:[],highscores:{}}); render(); } };
+
+/************* View: Pincode *************/
+function viewPC(root){
+  root.appendChild(card(`<h2>🔢 Pincode</h2>
+    <div class="muted">3 Runden à 1 min (konfigurierbar). Tippe die angezeigte PIN exakt ab. <b>Auto-Advance</b> bei Treffer. <b>Skip</b> schiebt die Aufgabe ans Ende der Warteschlange (du kannst später zurückkommen). <b>Pause</b> hält die Uhr an.</div>`));
+
+  const cfg={rounds:3, sec:60, len:4};
+  const panel=card(); panel.appendChild(formRow([
+    numberField('Runden',1,10,1,cfg.rounds,v=>cfg.rounds=v),
+    numberField('Sekunden pro Runde',10,300,5,cfg.sec,v=>cfg.sec=v),
+    selectField('PIN-Länge', [['3','3'],['4','4'],['5','5'],['6','6']], v=>cfg.len=parseInt(v), String(cfg.len)),
+    btn('Start',()=>run())
+  ]));
+  root.appendChild(panel);
+
+  const best=DB.highscores.pc; const hi=card('<h3>🏆 Highscore</h3>');
+  hi.insertAdjacentHTML('beforeend', best?`<div class="pill">Richtig: <b>${best.score}</b> · ${new Date(best.when).toLocaleString()}</div>`:'<div class="muted">Noch kein Highscore.</div>');
+  root.appendChild(hi);
+
+  function run(){
+    const ui=card(); root.appendChild(ui);
+    ui.innerHTML=`
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <span class="pill">Runde: <b id="rc">1</b> / ${cfg.rounds}</span>
+        <span class="pill">Zeit: <span id="t" class="timer">—</span></span>
+        <span class="pill">Score: <b id="sc">0</b></span>
+      </div>
+      <div class="center" style="margin-top:6px">
+        <div class="cue">Code</div>
+        <div id="stim" class="stim">1234</div>
+      </div>
+      <div class="row center" style="justify-content:center;gap:10px;margin-top:6px">
+        <input id="a" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Tippe hier…" maxlength="${cfg.len}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:260px">
+        <button id="ok" class="btn huge">OK</button>
+        <button id="skip" class="btn ghost huge">Skip</button>
+        <button id="clear" class="btn ghost huge">Clear</button>
+      </div>
+      <div class="row center" style="justify-content:center;gap:10px;margin-top:6px">
+        <button id="pause" class="btn ghost">Pause</button>
+        <button id="abort" class="btn danger">Abbrechen</button>
+      </div>
+      <div class="muted center" style="margin-top:6px">
+        Shortcuts: <span class="kbd">Enter</span>=OK · <span class="kbd">Space</span>=Skip · <span class="kbd">Esc</span>=Clear · <span class="kbd">P</span>=Pause
+      </div>
+    `;
+
+    const el={rc:$('#rc',ui),t:$('#t',ui),sc:$('#sc',ui),stim:$('#stim',ui),
+              a:$('#a',ui),ok:$('#ok',ui),skip:$('#skip',ui),clear:$('#clear',ui),pause:$('#pause',ui),abort:$('#abort',ui)};
+
+    // State
+    let round=0, score=0, correct=0, wrong=0, skipped=0;
+    let cur='', queue=[];
+    const per=[]; // {round, code, user, ok, ms}
+    // timing per round + per item
+    let tStart=0, paused=false, pauseT=0, tPause=0, running=true;
+    let qStart=0, qPaused=0, qPauseStart=0;
+
+    function focusInput(){ el.a.focus(); const pos=el.a.value.length; el.a.setSelectionRange(pos,pos); }
+
+    function tick(){
+      if(!running) return;
+      let nowPerf=performance.now();
+      if(paused) nowPerf=tPause;
+      const used=nowPerf-tStart-pauseT;
+      const left=Math.max(0, cfg.sec*1000 - used);
+      el.t.textContent = (left/1000).toFixed(1)+'s';
+      if(left<=0){ endRound(); return; }
+      requestAnimationFrame(tick);
+    }
+
+    function newCode(){
+      cur = queue.length ? queue.shift() : randCode(cfg.len);
+      el.stim.textContent = cur.split('').join(' ');
+      el.a.value='';
+      qStart=now(); qPaused=0;
+      focusInput();
+    }
+
+    function submit(kind){
+      let user = el.a.value;
+      if(kind==='clear'){ el.a.value=''; focusInput(); return; }
+      if(kind==='skip'){ skipped++; queue.push(cur); per.push({round:round+1, code:cur, user:'', ok:null, ms:''}); newCode(); return; }
+      // OK
+      if(user.length!==cfg.len){ // wenn zu kurz -> keine Wertung, aber Fokus halten
+        focusInput(); return;
+      }
+      const ms = Math.round(now()-qStart - qPaused);
+      const ok = (user===cur);
+      if(ok){ score++; correct++; } else { wrong++; }
+      per.push({round:round+1, code:cur, user, ok, ms});
+      newCode();
+      el.sc.textContent = String(score);
+    }
+
+    function pause(){
+      if(!paused){ paused=true; tPause=performance.now(); qPauseStart=now(); el.pause.textContent='Resume'; }
+      else { paused=false; pauseT += performance.now()-tPause; qPaused += now()-qPauseStart; el.pause.textContent='Pause'; requestAnimationFrame(tick); }
+      focusInput();
+    }
+
+    function endRound(){
+      // nächster Round oder Finish
+      round++;
+      if(round < cfg.rounds){
+        // kurze Anzeige & weiter
+        el.rc.textContent = String(round+1);
+        startRound(); // nahtlos weiter
+      } else {
+        finish();
+      }
+    }
+
+    function startRound(){
+      // init Zeiten für Runde
+      tStart = performance.now(); pauseT=0; paused=false; el.pause.textContent='Pause';
+      qStart=now(); qPaused=0;
+      // code generieren/aus Queue
+      newCode();
+      requestAnimationFrame(tick);
+    }
+
+    function finish(){
+      running=false;
+      const rows=[["#","Round","Code","Your","OK","ms"]];
+      per.forEach((x,i)=>rows.push([i+1,x.round,x.code,x.user??'', x.ok===true?'1':(x.ok===false?'0':''), x.ms??'']));
+      const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+      const txt=per.map((x,i)=>`${i+1}. [r${x.round}] ${x.code} | your=${x.user||'SKIP'} | ${x.ok===true?'OK':(x.ok===false?'X':'SKIP')} | ${x.ms||''}ms`).join('\n');
+
+      const stats={correct, wrong, skipped, score};
+      pushSession({module:'pc', stats, settings:{...cfg}, perQuestion:per});
+
+      ui.innerHTML = `
+        <h3>Ergebnis</h3>
+        <div class="row">
+          <span class="pill">Richtig: <b class="ok">${correct}</b></span>
+          <span class="pill">Falsch: <b class="bad">${wrong}</b></span>
+          <span class="pill">Skips: <b class="warn">${skipped}</b></span>
+          <span class="pill">Score (Richtig): <b>${score}</b></span>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="dlCsv">Download CSV</button>
+          <button class="btn ghost" id="dlTxt">Download TXT</button>
+        </div>
+        ${table(per.map((x,idx)=>[idx+1,x.round,x.code,x.user||'—',x.ok===true?'✅':(x.ok===false?'❌':'⏭'),(x.ms? (x.ms/1000).toFixed(2)+'s':'')]),['#','Runde','Code','Deine','OK','Zeit'])}
+      `;
+      $('#dlCsv',ui).onclick=()=>dl('pincode_'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv',csv,'text/csv');
+      $('#dlTxt',ui).onclick=()=>dl('pincode_'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt',txt,'text/plain');
+      render();
+    }
+
+    // wiring
+    el.ok.onmousedown = (e)=>e.preventDefault();
+    el.skip.onmousedown = (e)=>e.preventDefault();
+    el.clear.onmousedown = (e)=>e.preventDefault();
+    el.ok.onclick   = ()=>submit('ok');
+    el.skip.onclick = ()=>submit('skip');
+    el.clear.onclick= ()=>submit('clear');
+    el.pause.onclick= pause;
+    el.abort.onclick= ()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; ui.innerHTML='<div class="card">Abgebrochen – nicht gespeichert.</div>'; } };
+
+    // Keyboard
+    el.a.addEventListener('keydown',e=>{
+      if(e.key==='Enter'){ e.preventDefault(); submit('ok'); }
+      else if(e.key===' '){ e.preventDefault(); submit('skip'); }
+      else if(e.key==='Escape'){ e.preventDefault(); submit('clear'); }
+    });
+    // Auto-Advance bei korrekter voller Eingabe (ohne OK)
+    el.a.addEventListener('input',()=>{
+      const v=el.a.value.replace(/\D/g,'').slice(0,cfg.len);
+      if(el.a.value!==v){ el.a.value=v; }
+      if(v.length===cfg.len && v===cur){ submit('ok'); }
+    });
+
+    // Start first round
+    startRound();
+    focusInput();
+  }
+}
+
+/************* Statistik *************/
+function viewStats(root){
+  root.appendChild(card(`<h2>📊 Statistik</h2><div class="muted">Alle Läufe. Score = #richtig. Skips haben keinen Malus.</div>`));
+  const arr=DB.sessions.filter(s=>s.module==='pc');
+  const sum=f=>arr.reduce((a,x)=>a+(f(x)||0),0);
+  const el=card(`<div class="row">
+      <span class="pill">Sessions: <b>${arr.length}</b></span>
+      <span class="pill">Ø Richtig/Run: <b>${(sum(s=>s.stats?.correct)/Math.max(1,arr.length)).toFixed(1)}</b></span>
+      <span class="pill">Highscore: <b>${DB.highscores.pc?.score ?? '—'}</b></span>
+    </div>`);
+  const rows=arr.slice(-50).map((s,i)=>[
+    i+1, new Date(s.date).toLocaleString(),
+    s.stats.correct, s.stats.wrong, s.stats.skipped, s.settings?.rounds??'3',
+    `<span class="linklike" data-idx="${DB.sessions.indexOf(s)}">Details</span>`
+  ]);
+  el.insertAdjacentHTML('beforeend', table(rows,['#','Datum','Richtig','Falsch','Skips','Runden','Session'], [6]));
+  root.appendChild(el);
+  el.addEventListener('click',ev=>{
+    const t=ev.target.closest('.linklike'); if(!t) return;
+    const idx=+t.dataset.idx; const s=DB.sessions[idx];
+    const txt=(s?.perQuestion||[]).map((x,j)=>`${j+1}. [r${x.round}] ${x.code} | your=${x.user||'SKIP'} | ${x.ok===true?'OK':(x.ok===false?'X':'SKIP')} | ${x.ms||''}ms`).join('\n');
+    const url=URL.createObjectURL(new Blob([txt],{type:'text/plain'}));
+    const a=document.createElement('a'); a.href=url; a.download='session_'+new Date(s.date).toISOString().replace(/[:.]/g,'-')+'.txt'; a.click(); URL.revokeObjectURL(url);
+  });
+}
+
+/************* Einstellungen *************/
+function viewSettings(root){
+  root.appendChild(card(`<h2>⚙️ Einstellungen</h2><div class="muted">Datenpflege.</div>`));
+  const box=card(); box.appendChild(formRow([
+    btn("Nur Highscore löschen",()=>{ delete DB.highscores.pc; save(DBKEY,DB); alert("Highscore gelöscht."); },'btn ghost'),
+    btn("Alle Pincode-Sessions löschen",()=>{ DB.sessions=DB.sessions.filter(s=>s.module!=='pc'); save(DBKEY,DB); alert("Sessions gelöscht."); render(); },'btn danger'),
+  ]));
+  root.appendChild(box);
+}
+
+/* Start */
+render();
+</script>
+</main>
+</body>
+</html>
