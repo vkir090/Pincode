@@ -30,7 +30,7 @@
     .muted{color:var(--muted)} .center{text-align:center}
     .pill{padding:6px 10px;border:1px solid #2a316a;border-radius:999px;color:var(--muted)}
     .timer{font-variant-numeric:tabular-nums}
-    .stim{font-size:54px;letter-spacing:3px;margin:10px 0 12px}
+    .stim{font-size:54px;letter-spacing:3px;margin:10px 0 12px;transition:opacity .25s}
     .cue{font-size:18px;color:var(--accent2);text-transform:uppercase;letter-spacing:1px}
     table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
     th,td{padding:8px 10px;border-bottom:1px solid #232955}
@@ -80,8 +80,7 @@ function pushSession(entry){
 function card(html=''){ const d=document.createElement('div'); d.className='card'; d.innerHTML=html; return d; }
 function formRow(items){ const r=document.createElement('div'); r.className='row grid cols-2'; items.forEach(x=>r.appendChild(x)); return r; }
 function btn(label,fn,cls='btn'){ const b=document.createElement('button'); b.className=cls; b.textContent=label; 
-  // mobile: Keyboard offen lassen
-  b.onmousedown=(e)=>e.preventDefault();
+  b.onmousedown=(e)=>e.preventDefault(); // iOS: Keyboard offen lassen
   b.onclick=fn; return b; }
 function numberField(label,min,max,step,val,onInput){
   const w=document.createElement('div'); const id='n'+Math.random().toString(36).slice(2);
@@ -131,7 +130,7 @@ $('#resetAll').onclick=()=>{ if(confirm('Alle lokalen Daten löschen?')){ localS
 /************* View: Pincode *************/
 function viewPC(root){
   root.appendChild(card(`<h2>🔢 Pincode</h2>
-    <div class="muted">3 Runden à 1 min (konfigurierbar). Tippe die angezeigte PIN exakt ab. <b>Auto-Advance</b> bei Treffer. <b>Skip</b> schiebt die Aufgabe ans Ende der Warteschlange (du kannst später zurückkommen). <b>Pause</b> hält die Uhr an.</div>`));
+    <div class="muted">3 Runden à 1 min (konfigurierbar). Tippe die angezeigte PIN exakt ab. <b>Auto-Advance</b> bei Treffer. <b>Skip</b> schiebt die Aufgabe ans Ende (du kannst später zurückkommen). <b>Pause</b> hält die Uhr an. Die Ziffern werden nach kurzer Zeit ausgeblendet.</div>`));
 
   const cfg={rounds:3, sec:60, len:4};
   const panel=card(); panel.appendChild(formRow([
@@ -183,8 +182,22 @@ function viewPC(root){
     // timing per round + per item
     let tStart=0, paused=false, pauseT=0, tPause=0, running=true;
     let qStart=0, qPaused=0, qPauseStart=0;
+    // NEW: Timer zum Ausblenden
+    let hideTimer=null;
 
     function focusInput(){ el.a.focus(); const pos=el.a.value.length; el.a.setSelectionRange(pos,pos); }
+
+    function maskStim(){ // ersetzt Anzeige durch Bullets
+      el.stim.textContent = Array(cfg.len).fill('•').join(' ');
+    }
+    function scheduleMask(){
+      clearTimeout(hideTimer);
+      // kurze Sichtbarkeit abhängig von Länge (ähnlich V3: 1200ms + 80ms pro Ziffer)
+      const delay = 1200 + cfg.len*80;
+      hideTimer = setTimeout(maskStim, delay);
+    }
+
+    function clearMaskTimer(){ clearTimeout(hideTimer); hideTimer=null; }
 
     function tick(){
       if(!running) return;
@@ -198,21 +211,22 @@ function viewPC(root){
     }
 
     function newCode(){
+      clearMaskTimer();
       cur = queue.length ? queue.shift() : randCode(cfg.len);
+      el.stim.style.opacity = 1;
       el.stim.textContent = cur.split('').join(' ');
       el.a.value='';
       qStart=now(); qPaused=0;
       focusInput();
+      scheduleMask(); // <- nach kurzer Zeit ausblenden
     }
 
     function submit(kind){
-      let user = el.a.value;
       if(kind==='clear'){ el.a.value=''; focusInput(); return; }
       if(kind==='skip'){ skipped++; queue.push(cur); per.push({round:round+1, code:cur, user:'', ok:null, ms:''}); newCode(); return; }
-      // OK
-      if(user.length!==cfg.len){ // wenn zu kurz -> keine Wertung, aber Fokus halten
-        focusInput(); return;
-      }
+
+      let user = el.a.value;
+      if(user.length!==cfg.len){ focusInput(); return; }
       const ms = Math.round(now()-qStart - qPaused);
       const ok = (user===cur);
       if(ok){ score++; correct++; } else { wrong++; }
@@ -222,34 +236,34 @@ function viewPC(root){
     }
 
     function pause(){
-      if(!paused){ paused=true; tPause=performance.now(); qPauseStart=now(); el.pause.textContent='Resume'; }
-      else { paused=false; pauseT += performance.now()-tPause; qPaused += now()-qPauseStart; el.pause.textContent='Pause'; requestAnimationFrame(tick); }
+      if(!paused){
+        paused=true; tPause=performance.now(); qPauseStart=now(); el.pause.textContent='Resume';
+      }else{
+        paused=false; pauseT += performance.now()-tPause; qPaused += now()-qPauseStart; el.pause.textContent='Pause'; requestAnimationFrame(tick);
+      }
       focusInput();
     }
 
     function endRound(){
-      // nächster Round oder Finish
       round++;
       if(round < cfg.rounds){
-        // kurze Anzeige & weiter
         el.rc.textContent = String(round+1);
-        startRound(); // nahtlos weiter
+        startRound();
       } else {
         finish();
       }
     }
 
     function startRound(){
-      // init Zeiten für Runde
       tStart = performance.now(); pauseT=0; paused=false; el.pause.textContent='Pause';
       qStart=now(); qPaused=0;
-      // code generieren/aus Queue
       newCode();
       requestAnimationFrame(tick);
     }
 
     function finish(){
       running=false;
+      clearMaskTimer();
       const rows=[["#","Round","Code","Your","OK","ms"]];
       per.forEach((x,i)=>rows.push([i+1,x.round,x.code,x.user??'', x.ok===true?'1':(x.ok===false?'0':''), x.ms??'']));
       const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -285,7 +299,7 @@ function viewPC(root){
     el.skip.onclick = ()=>submit('skip');
     el.clear.onclick= ()=>submit('clear');
     el.pause.onclick= pause;
-    el.abort.onclick= ()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; ui.innerHTML='<div class="card">Abgebrochen – nicht gespeichert.</div>'; } };
+    el.abort.onclick= ()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; clearMaskTimer(); ui.innerHTML='<div class="card">Abgebrochen – nicht gespeichert.</div>'; } };
 
     // Keyboard
     el.a.addEventListener('keydown',e=>{
@@ -300,7 +314,7 @@ function viewPC(root){
       if(v.length===cfg.len && v===cur){ submit('ok'); }
     });
 
-    // Start first round
+    // Start
     startRound();
     focusInput();
   }
