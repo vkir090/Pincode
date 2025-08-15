@@ -62,12 +62,12 @@ const fmtMs=ms=>(ms/1000).toFixed(2)+"s";
 function dl(name,data,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();URL.revokeObjectURL(a.href);}
 const rndInt=(a,b)=>Math.floor(Math.random()*(b-a+1))+a;
 const pick=a=>a[Math.floor(Math.random()*a.length)];
-const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]];} return a;}
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j]];} return a;}
 const digitsToStr = arr => arr.join('');
 const bullets = n => Array(n).fill('•').join(' ');
 
 /************* Storage *************/
-const DBKEY='pc_db_v2';
+const DBKEY='pc_db_v3';
 function load(key,def){try{return JSON.parse(localStorage.getItem(key))||structuredClone(def);}catch{ return structuredClone(def);}}
 function save(key,val){localStorage.setItem(key,JSON.stringify(val));}
 let DB=load(DBKEY,{sessions:[],highscores:{}});
@@ -107,12 +107,13 @@ const RULE_LABEL={
 /************* App-Shell *************/
 const tabs=[
   {id:'classic', label:'Classic', view:viewClassic},
+  {id:'trainer', label:'Trainer (Step-Up)', view:viewTrainer},
   {id:'pro', label:'Pro (Mixed)', view:viewPro},
   {id:'stats', label:'Statistik', view:viewStats},
   {id:'settings', label:'Einstellungen', view:viewSettings},
 ];
-let currentTab=localStorage.getItem('pc_tab2')||'classic';
-function renderTabs(){ const nav=$('#tabs'); nav.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.textContent=t.label; b.className=currentTab===t.id?'active':''; b.onclick=()=>{currentTab=t.id; localStorage.setItem('pc_tab2',currentTab); render();}; nav.appendChild(b);});}
+let currentTab=localStorage.getItem('pc_tab3')||'classic';
+function renderTabs(){ const nav=$('#tabs'); nav.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.textContent=t.label; b.className=currentTab===t.id?'active':''; b.onclick=()=>{currentTab=t.id; localStorage.setItem('pc_tab3',currentTab); render();}; nav.appendChild(b);});}
 function render(){ renderTabs(); const root=$('#app'); root.innerHTML=''; (tabs.find(t=>t.id===currentTab)||tabs[0]).view(root); }
 
 /************* Export / Reset *************/
@@ -128,7 +129,7 @@ $('#exportCsv').onclick=()=>{
 };
 $('#resetAll').onclick=()=>{ if(confirm('Alle lokalen Daten löschen?')){ localStorage.removeItem(DBKEY); DB=load(DBKEY,{sessions:[],highscores:{}}); render(); } };
 
-/************* CLASSIC (Schnelles Abschreiben) *************/
+/************* CLASSIC *************/
 function viewClassic(root){
   root.appendChild(card(`<h2>🔢 Classic PIN</h2>
     <div class="muted">Tippe die angezeigte PIN exakt ab. <b>Auto-Advance</b> bei Treffer. <b>Skip</b> legt sie ans Ende. Die Ziffern blenden nach kurzer Zeit aus.</div>`));
@@ -176,11 +177,14 @@ function viewClassic(root){
     const el={rc:$('#rc',ui),t:$('#t',ui),sc:$('#sc',ui),stim:$('#stim',ui),
               a:$('#a',ui),ok:$('#ok',ui),skip:$('#skip',ui),clear:$('#clear',ui),pause:$('#pause',ui),abort:$('#abort',ui)};
 
+    // state
     let round=0, score=0, correct=0, wrong=0, skipped=0;
     let cur='', queue=[]; const per=[];
     let tStart=0, paused=false, pauseT=0, tPause=0, running=true;
     let qStart=0, qPaused=0, qPauseStart=0;
     let hideTimer=null;
+    let trialActive=false; // <- für Deadline-Penalty
+    let finished=false;
 
     function focusInput(){ el.a.focus(); const pos=el.a.value.length; el.a.setSelectionRange(pos,pos); }
     const maskStim = ()=>{ el.stim.textContent = bullets(cfg.len); };
@@ -191,34 +195,48 @@ function viewClassic(root){
       let tNow=performance.now(); if(paused) tNow=tPause;
       const used=tNow-tStart-pauseT, left=Math.max(0, cfg.sec*1000-used);
       el.t.textContent=(left/1000).toFixed(1)+'s';
-      if(left<=0){ endRound(); return; }
+      if(left<=0){ endRound(true); return; }  // true = durch Zeitablauf
       requestAnimationFrame(tick);
     }
     function newCode(){
       clearTimeout(hideTimer);
       cur = queue.length ? queue.shift() : digitsToStr(randDigits(cfg.len,true,true));
       el.stim.style.opacity=1; el.stim.textContent=cur.split('').join(' ');
-      el.a.value=''; qStart=now(); qPaused=0; focusInput(); scheduleMask();
+      el.a.value=''; qStart=now(); qPaused=0; trialActive=true; focusInput(); scheduleMask();
     }
     function submit(kind){
+      if(!running) return;
       if(kind==='clear'){ el.a.value=''; focusInput(); return; }
-      if(kind==='skip'){ skipped++; queue.push(cur); per.push({round:round+1, kind:'classic', code:cur, user:'', ok:null, ms:''}); newCode(); return; }
+      if(kind==='skip'){ skipped++; queue.push(cur); per.push({round:round+1, kind:'classic', code:cur, user:'', correct:null, ms:'', skipped:1}); trialActive=false; newCode(); return; }
       const user=el.a.value; if(user.length!==cfg.len){ focusInput(); return; }
       const ms=Math.round(now()-qStart - qPaused); const ok=(user===cur);
       if(ok){ score++; correct++; } else { wrong++; }
-      per.push({round:round+1, kind:'classic', code:cur, user, ok, ms});
-      newCode(); el.sc.textContent=String(score);
+      per.push({round:round+1, kind:'classic', code:cur, user, correct:ok?1:0, ms});
+      trialActive=false; newCode(); el.sc.textContent=String(score);
     }
-    function pause(){ if(!paused){ paused=true; tPause=performance.now(); qPauseStart=now(); el.pause.textContent='Resume'; } else { paused=false; pauseT+=performance.now()-tPause; qPaused+=now()-qPauseStart; el.pause.textContent='Pause'; requestAnimationFrame(tick);} focusInput(); }
-    function endRound(){ round++; if(round<cfg.rounds){ el.rc.textContent=String(round+1); startRound(); } else { finish(); } }
+    function pause(){ if(!running) return;
+      if(!paused){ paused=true; tPause=performance.now(); qPauseStart=now(); el.pause.textContent='Resume'; } 
+      else { paused=false; pauseT+=performance.now()-tPause; qPaused+=now()-qPauseStart; el.pause.textContent='Pause'; requestAnimationFrame(tick);} 
+      focusInput();
+    }
+    function endRound(byTimeout=false){
+      if(byTimeout && trialActive){ // offene Aufgabe als falsch werten
+        per.push({round:round+1, kind:'classic', code:cur, user:'', correct:0, ms:'', deadline:1});
+        wrong++; trialActive=false;
+      }
+      round++;
+      if(round<cfg.rounds){ el.rc.textContent=String(round+1); startRound(); }
+      else { finish(); }
+    }
     function startRound(){ tStart=performance.now(); pauseT=0; paused=false; el.pause.textContent='Pause'; qStart=now(); qPaused=0; newCode(); requestAnimationFrame(tick); }
     function finish(){
+      if(finished) return; finished=true;
       running=false; clearTimeout(hideTimer);
       const stats={correct, wrong, skipped, score};
       pushSession({module:'pc_classic', stats, settings:{...cfg}, perQuestion:per});
-      const rows=[["#","Round","Code","Your","OK","ms"]]; per.forEach((x,i)=>rows.push([i+1,x.round,x.code,x.user??'', x.ok===true?'1':(x.ok===false?'0':''), x.ms??'']));
+      const rows=[["#","Round","Code","Your","OK","ms"]]; per.forEach((x,i)=>rows.push([i+1,x.round,x.code,x.user??'', x.correct===1?'1':(x.correct===0?'0':''), x.ms??'']));
       const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-      const txt=per.map((x,i)=>`${i+1}. [r${x.round}] ${x.code} | your=${x.user||'SKIP'} | ${x.ok===true?'OK':(x.ok===false?'X':'SKIP')} | ${x.ms||''}ms`).join('\n');
+      const txt=per.map((x,i)=>`${i+1}. [r${x.round}] ${x.code} | your=${x.user||'SKIP'} | ${x.correct===1?'OK':(x.correct===0?'X':'SKIP')} | ${x.ms||''}ms`).join('\n');
       ui.innerHTML=`<h3>Ergebnis</h3>
         <div class="row"><span class="pill">Richtig: <b class="ok">${correct}</b></span>
         <span class="pill">Falsch: <b class="bad">${wrong}</b></span>
@@ -226,7 +244,7 @@ function viewClassic(root){
         <span class="pill">Score: <b>${score}</b></span></div>
         <div class="row" style="margin-top:8px"><button class="btn" id="dlCsv">Download CSV</button>
         <button class="btn ghost" id="dlTxt">Download TXT</button></div>
-        ${table(per.map((x,idx)=>[idx+1,x.round,x.code,x.user||'—',x.ok===true?'✅':(x.ok===false?'❌':'⏭'),(x.ms? (x.ms/1000).toFixed(2)+'s':'')]),['#','Runde','Code','Deine','OK','Zeit'])}`;
+        ${table(per.map((x,idx)=>[idx+1,x.round,x.code,x.user||'—',x.correct===1?'✅':(x.correct===0?'❌':'⏭'),(x.ms? (x.ms/1000).toFixed(2)+'s':'')]),['#','Runde','Code','Deine','OK','Zeit'])}`;
       $('#dlCsv',ui).onclick=()=>dl('pincode_classic_'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv',csv,'text/csv');
       $('#dlTxt',ui).onclick=()=>dl('pincode_classic_'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt',txt,'text/plain');
       render();
@@ -242,18 +260,158 @@ function viewClassic(root){
   }
 }
 
-/************* PRO (Mixed nach Spezifikation) *************/
+/************* TRAINER (Step-Up) *************/
+function viewTrainer(root){
+  root.appendChild(card(`<h2>🧱 Trainer (Step-Up)</h2>
+    <div class="muted">Zwischenstufe: Recall, Reverse, Sort (ASC), Rule (+1 oder 9−d). Anzeige → Maskierung → Antwort. Skip legt Item ans Ende.</div>`));
+
+  const cfg={
+    seconds:240,
+    lenMin:4, lenMax:7, allowZero:true, allowRepeats:true,
+    showPerDigit:[800,1400], answerTimeout:[1500,2500], iti:[300,700],
+    mix:{recall:.20, reverse:.30, sort:.25, rule:.25}
+  };
+
+  const panel=card(); panel.appendChild(formRow([
+    numberField('Session (s)',60,1200,10,cfg.seconds,v=>cfg.seconds=v),
+    numberField('Länge min',3,8,1,cfg.lenMin,v=>cfg.lenMin=v),
+    numberField('Länge max',4,9,1,cfg.lenMax,v=>cfg.lenMax=v),
+    btn('Start',()=>run())
+  ]));
+  root.appendChild(panel);
+
+  function perDigitMs(){ return rndInt(cfg.showPerDigit[0], cfg.showPerDigit[1]); }
+  function ansTimeoutMs(){ return rndInt(cfg.answerTimeout[0], cfg.answerTimeout[1]); }
+  function itiMs(){ return rndInt(cfg.iti[0], cfg.iti[1]); }
+  function randLen(){ return rndInt(cfg.lenMin, cfg.lenMax); }
+  function pickWeighted(m){ const entries=Object.entries(m); const s=entries.reduce((a,[,w])=>a+w,0); let r=Math.random()*s; for(const [k,w] of entries){ if((r-=w)<=0) return k; } return entries[0][0]; }
+
+  function makeItem(){
+    const kind=pickWeighted(cfg.mix);
+    const L=randLen(); const base=randDigits(L,cfg.allowZero,cfg.allowRepeats); const baseStr=digitsToStr(base);
+    if(kind==='recall')  return {kind,cue:'RECALL', len:L, baseStr, target:baseStr};
+    if(kind==='reverse') return {kind,cue:'REVERSE', len:L, baseStr, target:digitsToStr([...base].reverse())};
+    if(kind==='sort'){ const out=[...base].sort((a,b)=>a-b); return {kind,cue:'SORT ASC', len:L, baseStr, target:digitsToStr(out)}; }
+    if(kind==='rule'){ const R=Math.random()<.5?'PLUS1':'NINE_MINUS_D'; const out=base.map(d=>applyRule(d,R)); return {kind,cue:`RULE ${RULE_LABEL[R]}`, len:L, baseStr, target:digitsToStr(out)}; }
+    return {kind:'recall', cue:'RECALL', len:L, baseStr, target:baseStr};
+  }
+
+  function run(){
+    const ui=card(); root.appendChild(ui);
+    ui.innerHTML=`
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <span class="pill">Zeit: <span id="t" class="timer">—</span></span>
+        <span class="pill">Score: <b id="sc">0</b></span>
+        <span class="pill">Item: <b id="ic">0</b></span>
+      </div>
+      <div class="center" style="margin-top:6px">
+        <div id="cue" class="cue">—</div>
+        <div id="stim" class="stim">•</div>
+      </div>
+      <div id="answerBlock" class="row center" style="justify-content:center;gap:10px;margin-top:6px">
+        <input id="a" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Antwort…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:280px">
+        <button id="ok" class="btn huge">OK</button>
+        <button id="skip" class="btn ghost huge">Skip</button>
+        <button id="clear" class="btn ghost huge">Clear</button>
+      </div>
+      <div class="row center" style="justify-content:center;gap:10px;margin-top:6px">
+        <button id="abort" class="btn danger">Abbrechen</button>
+      </div>`;
+
+    const el={t:$('#t',ui),sc:$('#sc',ui),ic:$('#ic',ui),cue:$('#cue',ui),stim:$('#stim',ui),
+              a:$('#a',ui),ok:$('#ok',ui),skip:$('#skip',ui),clear:$('#clear',ui),abort:$('#abort',ui)};
+
+    const per=[]; let score=0, correct=0, wrong=0, skipped=0;
+    let running=true, finished=false; const totalMs=cfg.seconds*1000; const timers=[];
+    let state='IDLE', cur=null, qStart=0, currentFail=null;
+
+    const setT=(fn,ms)=>{ const id=setTimeout(fn,ms); timers.push(id); return id; };
+    const clearAll=()=>{ while(timers.length) clearTimeout(timers.pop()); };
+
+    function updateHUD(){ el.sc.textContent=String(score); el.ic.textContent=String(per.length); }
+    function pushRec(r){ per.push(r); if(r.skipped){skipped++;} else if(r.correct){correct++;score+=1;} else {wrong++;} updateHUD(); }
+
+    function nextItem(){
+      if(!running) return;
+      cur=makeItem(); el.cue.textContent=cur.cue; el.a.value=''; el.a.maxLength=cur.len; el.a.focus();
+      // Anzeige + Maskierung
+      el.stim.textContent=cur.baseStr.split('').join(' ');
+      setT(()=>{ el.stim.textContent=bullets(cur.len); startAnswer(); }, perDigitMs());
+    }
+    function startAnswer(){
+      state='ANSWER'; qStart=now();
+      const deadline=ansTimeoutMs();
+      currentFail=()=>{ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:0, ms:'', len:cur.len, deadline:1}); startITI(); };
+      setT(currentFail, deadline);
+    }
+    function submit(kind){
+      if(!running || state!=='ANSWER') return;
+      if(kind==='skip'){ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:null, ms:'', len:cur.len, skipped:1}); startITI(true); return; }
+      if(kind==='clear'){ el.a.value=''; el.a.focus(); return; }
+      const user=el.a.value; if(user.length!==cur.len){ el.a.focus(); return; }
+      const ms=Math.round(now()-qStart); const ok=(user===cur.target);
+      pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user, correct:ok?1:0, ms, len:cur.len});
+      startITI();
+    }
+    function startITI(skipQueue=false){
+      currentFail=null;
+      state='ITI';
+      setT(()=>{ if(skipQueue) nextItem(); else nextItem(); }, itiMs());
+    }
+
+    function finish(){
+      if(finished) return; finished=true;
+      running=false; clearAll();
+      const stats={correct, wrong, skipped, score};
+      pushSession({module:'pc_trainer', stats, settings:{...cfg}, perQuestion:per});
+      const rows=[["#","kind","cue","code","target","user","ok","ms"]];
+      per.forEach((x,i)=>rows.push([i+1,x.kind,x.cue||'',x.code||'',x.target||'',x.user??'',x.correct==null?'':(x.correct?1:0),x.ms||'']));
+      const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+      const txt=per.map((x,i)=>`${i+1}. ${x.kind} | ${x.cue||''} | base=${x.code||''} | targ=${x.target||''} | user=${x.user??''} | ok=${x.correct==null?'':(x.correct?1:0)} | ms=${x.ms||''}`).join('\n');
+      ui.innerHTML=`<h3>Ergebnis (Trainer)</h3>
+        <div class="row"><span class="pill">Richtig: <b class="ok">${stats.correct}</b></span>
+        <span class="pill">Falsch: <b class="bad">${stats.wrong}</b></span>
+        <span class="pill">Skips: <b class="warn">${stats.skipped}</b></span>
+        <span class="pill">Score: <b>${stats.score}</b></span></div>
+        <div class="row" style="margin-top:8px"><button class="btn" id="dlCsv">Download CSV</button>
+        <button class="btn ghost" id="dlTxt">Download TXT</button></div>
+        ${table(per.slice(-200).map((x,i)=>[i+1,x.kind,x.cue||'',x.code||'—',x.target||'—',x.user??'—',x.correct==null?'⏭':(x.correct? '✅':'❌'),x.ms? (x.ms/1000).toFixed(2)+'s':'']),['#','Typ','Cue','Basis','Ziel','Antwort','OK','Zeit'])}`;
+      $('#dlCsv',ui).onclick=()=>dl('pincode_trainer_'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv',csv,'text/csv');
+      $('#dlTxt',ui).onclick=()=>dl('pincode_trainer_'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt',txt,'text/plain');
+      render();
+    }
+
+    const t0=performance.now();
+    (function loop(){
+      if(!running) return;
+      const used=performance.now()-t0, left=Math.max(0, cfg.seconds*1000-used);
+      el.t.textContent=(left/1000).toFixed(1)+'s';
+      if(left<=0){
+        // offene Aufgabe als falsch
+        if(typeof currentFail==='function') currentFail();
+        return finish();
+      }
+      requestAnimationFrame(loop);
+    })();
+
+    el.ok.onclick=()=>submit('ok'); el.skip.onclick=()=>submit('skip'); el.clear.onclick=()=>submit('clear');
+    el.a.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submit('ok'); } else if(e.key===' '){ e.preventDefault(); submit('skip'); } });
+    el.abort.onclick=()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; finish(); } };
+
+    nextItem();
+  }
+}
+
+/************* PRO (Mixed, mit robustem Timeout-Ende) *************/
 function viewPro(root){
   root.appendChild(card(`<h2>🧠 Pro PIN (Mixed)</h2>
-    <div class="muted">Mix aus Recall/Reverse/Sort/Rule/Rule-Switch/Sternberg/n-back/Interferenz. <b>Skips</b> legen Aufgaben ans Ende. Standard-Scoring: +1 korrekt, sonst 0.</div>`));
+    <div class="muted">Recall/Reverse/Sort/Rule/Rule-Switch/Sternberg/n-back/Interferenz. Skips → ans Ende. Offene Trials werden bei Zeitablauf als falsch gewertet.</div>`));
 
   const cfg={
     seconds:360,
     lenMin:4, lenMax:8,
     allowZero:true, allowRepeats:true,
-    showPerDigit:[600,2000], // ms/Ziffer (Anzeigezeit der Vorlage)
-    answerTimeout:[1200,3000], // ms (Antwortfenster)
-    iti:[300,700],
+    showPerDigit:[600,2000], answerTimeout:[1200,3000], iti:[300,700],
     mix:{recall:.10, reverse:.15, sort:.15, rule:.15, switch:.15, sternberg:.10, nback:.10, interference:.10},
     rulesAtomic:['PLUS1','MINUS1','PLUS2','NINE_MINUS_D','TIMES2_MOD10'],
     switchPairs:[['PLUS1','MINUS1'],['NINE_MINUS_D','PLUS2']],
@@ -265,9 +423,7 @@ function viewPro(root){
     numberField('Session (s)',60,1200,10,cfg.seconds,v=>cfg.seconds=v),
     numberField('Länge min',3,8,1,cfg.lenMin,v=>cfg.lenMin=v),
     numberField('Länge max',4,9,1,cfg.lenMax,v=>cfg.lenMax=v),
-    selectField('Zero', [['yes','0 erlaubt'],['no','ohne 0']], v=>cfg.allowZero=(v==='yes'), cfg.allowZero?'yes':'no'),
-    selectField('Repeats', [['yes','Wiederholungen OK'],['no','keine Wiederholungen']], v=>cfg.allowRepeats=(v==='yes'), cfg.allowRepeats?'yes':'no'),
-    btn('Start Mixed',()=>run('mixed'))
+    btn('Start',()=>run())
   ]));
   root.appendChild(panel);
 
@@ -275,10 +431,8 @@ function viewPro(root){
   function ansTimeoutMs(){ return rndInt(cfg.answerTimeout[0], cfg.answerTimeout[1]); }
   function itiMs(){ return rndInt(cfg.iti[0], cfg.iti[1]); }
   function randLen(){ return rndInt(cfg.lenMin, cfg.lenMax); }
-
   function pickWeighted(m){ const entries=Object.entries(m); const s=entries.reduce((a,[,w])=>a+w,0); let r=Math.random()*s; for(const [k,w] of entries){ if((r-=w)<=0) return k; } return entries[0][0]; }
 
-  // Item factory
   function makeItem(kindOverride=null){
     const kind = kindOverride || pickWeighted(cfg.mix);
     const L = randLen();
@@ -290,7 +444,7 @@ function viewPro(root){
     if(kind==='sort'){
       const mode = Math.random()<.5?'ASC':'DESC';
       const out = [...base].sort((a,b)=>a-b); if(mode==='DESC') out.reverse();
-      return {...common, cue:`SORT ${mode}`, target:digitsToStr(out), mode};
+      return {...common, cue:`SORT ${mode}`, mode, target:digitsToStr(out)};
     }
     if(kind==='rule'){
       const R=pick(cfg.rulesAtomic); const out=base.map(d=>applyRule(d,R));
@@ -298,15 +452,11 @@ function viewPro(root){
     }
     if(kind==='switch'){
       const [A,B]=pick(cfg.switchPairs); const mode = Math.random()<.5?'byPosition':'byParity';
-      const out = base.map((d,i)=>{
-        const useA = (mode==='byPosition') ? (i%2===0) : (d%2===0);
-        return applyRule(d, useA?A:B);
-      });
+      const out = base.map((d,i)=> applyRule(d, (mode==='byPosition') ? (i%2===0?A:B) : (d%2===0?A:B)) );
       return {...common, cue:`SWITCH ${RULE_LABEL[A]} / ${RULE_LABEL[B]} (${mode==='byPosition'?'pos':'par'})`, ruleA:A, ruleB:B, switchMode:mode, target:digitsToStr(out)};
     }
     if(kind==='interference'){
       const inner = makeItem(pick(['reverse','sort','rule']));
-      // kleiner Ablenker
       const a=rndInt(12,99), b=Math.random()<.5?rndInt(12,99):rndInt(6,18);
       const op = Math.random()<.5?'+':'×'; const distract=`${a} ${op} ${b}`;
       return {...inner, kind:'interference', cue:`INTERF · dann ${inner.cue}`, distract};
@@ -320,11 +470,9 @@ function viewPro(root){
       for(let i=0;i<cfg.sternberg.probes;i++){
         const needTarget = Math.random() < (tLeft/nLeft);
         if(needTarget){ probes.push(pick(set)); isT.push(1); tLeft--; }
-        else{ // non-target: pick digit not in set
-          let d; do{ d=pick(cfg.allowZero?[0,1,2,3,4,5,6,7,8,9]:[1,2,3,4,5,6,7,8,9]); }while(set.includes(d));
+        else{ let d; do{ d=pick(cfg.allowZero?[0,1,2,3,4,5,6,7,8,9]:[1,2,3,4,5,6,7,8,9]); }while(set.includes(d));
           probes.push(d); isT.push(0);
-        }
-        nLeft--;
+        } nLeft--;
       }
       return {kind:'sternberg', cue:`STERNBERG – Merke Set`, set, probes, isTarget:isT};
     }
@@ -377,50 +525,40 @@ function viewPro(root){
 
     // session state
     const per=[]; let score=0, correct=0, wrong=0, skipped=0;
-    let running=true; let tStart=performance.now(); let totalMs=cfg.seconds*1000;
-    let state='IDLE'; // SHOW -> MASK -> ANSWER / (DISTRACTOR) -> ITI
-    let cur=null; let qStart=0; let hideTO=null; let deadlineTO=null; let itiUntil=0;
-    const queue=[];
+    let running=true, finished=false; const totalMs=cfg.seconds*1000;
+    let state='IDLE', cur=null, qStart=0, currentFail=null;
+    const timers=[];
+    const setT=(fn,ms)=>{ const id=setTimeout(fn,ms); timers.push(id); return id; };
+    const clearAll=()=>{ while(timers.length) clearTimeout(timers.pop()); };
+    const keyHandlers=[];
+    const addKey=(fn)=>{ window.addEventListener('keydown',fn); keyHandlers.push(fn); };
+    const clearKeys=()=>{ keyHandlers.forEach(fn=>window.removeEventListener('keydown',fn)); keyHandlers.length=0; };
 
-    function updateScore(){ el.sc.textContent=String(score); el.ic.textContent=String(per.length); }
     function setAnswerMode(onText){ el.ans.style.display=onText?'flex':'none'; el.yn.style.display=onText?'none':'flex'; }
     function showBullets(){ el.stim.textContent=bullets((cur && cur.len)||Math.max(cfg.lenMin,4)); }
-    function clearTimers(){ clearTimeout(hideTO); clearTimeout(deadlineTO); hideTO=null; deadlineTO=null; }
-
-    function pushRec(rec){
-      per.push(rec);
-      if(rec.skipped){ skipped++; }
-      else if(rec.correct){ correct++; score += 1; }
-      else { wrong++; }
-      updateScore();
-    }
-
-    function scheduleDeadline(ms, cb){ clearTimeout(deadlineTO); deadlineTO=setTimeout(cb, ms); }
+    function updateScore(){ el.sc.textContent=String(score); el.ic.textContent=String(per.length); }
+    function pushRec(rec){ per.push(rec); if(rec.skipped){ skipped++; } else if(rec.correct){ correct++; score += 1; } else { wrong++; } updateScore(); }
 
     function nextItem(){
       if(!running) return;
-      if(queue.length){ cur=queue.shift(); }
-      else{ cur=makeItem(); }
+      cur = makeItem();
       el.cue.textContent=cur.cue;
 
-      // streams (sternberg/nback) haben eigenen Ablauf
+      // Streams
       if(cur.kind==='sternberg') return runSternberg(cur);
       if(cur.kind==='nback')    return runNback(cur);
 
-      // Einzel-Item Ablauf
+      // Einzel-Item
       setAnswerMode(true);
       el.a.value=''; el.a.maxLength=cur.len; el.a.focus();
-      // Anzeige & Maskierung
-      const showMs = perDigitMs(); // pro Ziffer
       el.stim.textContent = cur.baseStr.split('').join(' ');
-      hideTO=setTimeout(()=>{ el.stim.textContent = (cur.kind==='interference') ? '…' : bullets(cur.len); }, showMs);
-      // bei Interferenz: Distractor nach kurzer Pause
+      setT(()=>{ el.stim.textContent = (cur.kind==='interference') ? '…' : bullets(cur.len); }, perDigitMs());
       if(cur.kind==='interference'){
-        const dly = showMs + 150;
-        setTimeout(()=>{ el.cue.textContent = `DISTRACTOR – nur ansehen`; el.stim.textContent=cur.distract; }, dly);
-        setTimeout(()=>{ el.cue.textContent = cur.cue; showBullets(); startAnswer(); }, dly + rndInt(800,1500));
+        const dly = perDigitMs() + 150;
+        setT(()=>{ el.cue.textContent = `DISTRACTOR – nur ansehen`; el.stim.textContent=cur.distract; }, dly);
+        setT(()=>{ el.cue.textContent = cur.cue; showBullets(); startAnswer(); }, dly + rndInt(800,1500));
       }else{
-        setTimeout(()=>{ startAnswer(); }, showMs+50);
+        setT(()=>{ startAnswer(); }, perDigitMs()+50);
       }
     }
 
@@ -428,18 +566,15 @@ function viewPro(root){
       if(!running) return;
       state='ANSWER'; qStart=now();
       const deadline=ansTimeoutMs();
-      scheduleDeadline(deadline, ()=>{ // zu spät
-        pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:0, ms:'', len:cur.len, deadline:1, cue:cur.cue});
-        startITI();
-      });
+      currentFail=()=>{ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:0, ms:'', len:cur.len, deadline:1, cue:cur.cue}); startITI(); };
+      setT(currentFail, deadline);
     }
 
     function submitText(kind){
-      if(state!=='ANSWER') return;
-      if(kind==='skip'){ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:null, ms:'', len:cur.len, skipped:1, cue:cur.cue}); queue.push(cur); return startITI(); }
+      if(state!=='ANSWER' || !running) return;
+      if(kind==='skip'){ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:null, ms:'', len:cur.len, skipped:1, cue:cur.cue}); startITI(); return; }
       if(kind==='clear'){ el.a.value=''; el.a.focus(); return; }
-      const user = el.a.value;
-      if(user.length!==cur.len) { el.a.focus(); return; }
+      const user = el.a.value; if(user.length!==cur.len){ el.a.focus(); return; }
       const ms=Math.round(now()-qStart);
       const ok = (user===cur.target);
       flash(ok);
@@ -450,47 +585,51 @@ function viewPro(root){
     function flash(ok){
       el.stim.classList.remove('flash-ok','flash-bad');
       el.stim.classList.add(ok?'flash-ok':'flash-bad');
-      setTimeout(()=>el.stim.classList.remove('flash-ok','flash-bad'),150);
+      setT(()=>el.stim.classList.remove('flash-ok','flash-bad'),150);
     }
 
-    function startITI(){ clearTimers(); state='ITI'; itiUntil=now()+itiMs(); requestAnimationFrame(tick); }
+    function startITI(){ currentFail=null; state='ITI'; setT(()=>{ nextItem(); }, itiMs()); }
 
     // STERNBERG
     function runSternberg(it){
       setAnswerMode(false);
-      // Set zeigen (seriell)
       const perDigit = perDigitMs();
       el.cue.textContent='STERNBERG – Set merken';
       let idx=0;
       function showNext(){
+        if(!running) return;
         if(idx<it.set.length){
-          el.stim.textContent=String(it.set[idx]); idx++; setTimeout(showNext, perDigit);
+          el.stim.textContent=String(it.set[idx]); idx++; setT(showNext, perDigit);
         }else{
           el.stim.textContent='•';
-          setTimeout(()=>runProbes(), 250);
+          setT(()=>runProbes(), 250);
         }
       }
       showNext();
       function runProbes(){
         let k=0;
         function step(){
+          if(!running) return;
           if(k>=it.probes.length) { startITI(); return; }
           el.cue.textContent='Probe: war sie im Set?';
           el.stim.textContent=String(it.probes[k]);
-          const start=now(); setAnswerMode(false);
+          const start=now();
+          setAnswerMode(false);
           const deadline=ansTimeoutMs(); let answered=false;
           function done(resp){
-            if(answered) return; answered=true;
+            if(answered || !running) return; answered=true;
             const rt=Math.round(now()-start);
             const truth=it.isTarget[k]===1; const ok = (resp==='Y')===truth;
             flash(ok);
             pushRec({kind:'sternberg', probe:k+1, set:digitsToStr(it.set), digit:it.probes[k], isTarget:truth?1:0,
                      resp:(resp==='Y'?'Y':'N'), correct:ok?1:0, ms:rt, cue:'STERNBERG'});
-            k++; setTimeout(step, itiMs());
+            k++; setT(step, itiMs());
           }
-          scheduleDeadline(deadline, ()=>done('Z')); // timeup = falsch
+          currentFail=()=>done('Z');  // Zeit überschritten -> falsch
+          setT(currentFail, deadline);
+          const key=(e)=>{ if(e.key==='Enter') done('Y'); else if(e.key===' ') { e.preventDefault(); done('N'); } };
+          addKey(key);
           el.yes.onclick=()=>done('Y'); el.no.onclick=()=>done('N');
-          window.onkeydown=(e)=>{ if(e.key==='Enter') done('Y'); else if(e.key===' ') { e.preventDefault(); done('N'); } };
         }
         step();
       }
@@ -502,21 +641,24 @@ function viewPro(root){
       el.cue.textContent=`${it.n}-BACK – Treffer wenn gleich vor ${it.n}`;
       let k=0; const dly=rndInt(500,900);
       function step(){
+        if(!running) return;
         if(k>=it.stream.length){ startITI(); return; }
         el.stim.textContent=String(it.stream[k]);
         const start=now(); const isTarget = it.targets[k]===1;
         const deadline = Math.max(400, dly-50); let answered=false;
         function done(hit){
-          if(answered) return; answered=true;
+          if(answered || !running) return; answered=true;
           const rt=Math.round(now()-start);
           const ok = (hit===true)===isTarget;
           flash(ok);
           pushRec({kind:'nback', n:it.n, pos:k+1, digit:it.stream[k], target:isTarget?1:0, resp:hit?1:0, correct:ok?1:0, ms:rt, cue:`${it.n}-BACK`});
-          k++; setTimeout(step, 100);
+          k++; setT(step, 100);
         }
-        scheduleDeadline(deadline, ()=>done(false)); // keine Taste = Nein
+        currentFail=()=>done(false); // keine Reaktion = Nein
+        setT(currentFail, deadline);
+        const key=(e)=>{ if(e.key==='Enter') done(true); else if(e.key===' ') { e.preventDefault(); done(false); } };
+        addKey(key);
         el.yes.onclick=()=>done(true); el.no.onclick=()=>done(false);
-        window.onkeydown=(e)=>{ if(e.key==='Enter') done(true); else if(e.key===' ') { e.preventDefault(); done(false); } };
       }
       step();
     }
@@ -526,19 +668,19 @@ function viewPro(root){
     el.skip.onclick = ()=>submitText('skip');
     el.clear.onclick = ()=>submitText('clear');
     el.a.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submitText('ok'); } else if(e.key===' '){ e.preventDefault(); submitText('skip'); } });
-    el.abort.onclick=()=>{ running=false; clearTimers(); finish(); };
+    el.abort.onclick=()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; forceEnd(); } };
 
-    function tick(){
-      if(!running) return;
-      const used=performance.now()-tStart; const left=Math.max(0,totalMs-used);
-      el.t.textContent=(left/1000).toFixed(1)+'s';
-      if(left<=0){ running=false; return finish(); }
-      if(state==='ITI' && now()>=itiUntil){ state='IDLE'; nextItem(); }
-      requestAnimationFrame(tick);
+    function forceEnd(){
+      if(!running || finished) return;
+      // offene Aufgabe als falsch
+      if(typeof currentFail==='function'){ try{ currentFail(); }catch{} }
+      finish();
     }
 
     function finish(){
-      clearTimers();
+      if(finished) return; finished=true;
+      running=false; currentFail=null;
+      clearAll(); clearKeys();
       const stats={correct, wrong, skipped, score};
       pushSession({module:'pc_pro', stats, settings:{...cfg}, perQuestion:per});
       const rows=[["#","kind","cue","code/set","target/digit","user/resp","ok","ms"]];
@@ -572,18 +714,24 @@ function viewPro(root){
       render();
     }
 
-    // Start
-    requestAnimationFrame(tick);
+    // Session-Timer (hartes Ende + Penalty)
+    const t0=performance.now();
+    (function loop(){
+      if(finished) return;
+      const used=performance.now()-t0, left=Math.max(0, totalMs-used);
+      el.t.textContent=(left/1000).toFixed(1)+'s';
+      if(left<=0){ running=false; return forceEnd(); }
+      requestAnimationFrame(loop);
+    })();
+
     nextItem();
   }
-
-  run(); // sofort startbereit, oder nur nach Klick: auskommentieren
 }
 
 /************* Statistik *************/
 function viewStats(root){
-  root.appendChild(card(`<h2>📊 Statistik</h2><div class="muted">Classic & Pro zusammengefasst. Skips zählen nicht als falsch.</div>`));
-  const arr=DB.sessions.filter(s=>s.module==='pc_classic'||s.module==='pc_pro');
+  root.appendChild(card(`<h2>📊 Statistik</h2><div class="muted">Classic, Trainer & Pro zusammengefasst. Skips zählen nicht als falsch.</div>`));
+  const arr=DB.sessions.filter(s=>s.module==='pc_classic'||s.module==='pc_trainer'||s.module==='pc_pro');
   const sum=f=>arr.reduce((a,x)=>a+(f(x)||0),0);
   const el=card(`<div class="row">
       <span class="pill">Sessions: <b>${arr.length}</b></span>
@@ -611,7 +759,7 @@ function viewSettings(root){
   root.appendChild(card(`<h2>⚙️ Einstellungen</h2><div class="muted">Datenpflege.</div>`));
   const box=card(); box.appendChild(formRow([
     btn("Nur Highscore löschen",()=>{ delete DB.highscores.pc; save(DBKEY,DB); alert("Highscore gelöscht."); },'btn ghost'),
-    btn("Alle Pincode-Sessions löschen",()=>{ DB.sessions=DB.sessions.filter(s=>!(s.module==='pc_classic'||s.module==='pc_pro')); save(DBKEY,DB); alert("Sessions gelöscht."); render(); },'btn danger'),
+    btn("Alle Pincode-Sessions löschen",()=>{ DB.sessions=DB.sessions.filter(s=>!(s.module==='pc_classic'||s.module==='pc_trainer'||s.module==='pc_pro')); save(DBKEY,DB); alert("Sessions gelöscht."); render(); },'btn danger'),
   ]));
   root.appendChild(box);
 }
