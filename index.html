@@ -396,6 +396,18 @@ function viewStep(root){
       queueNext();
     }
 
+    function table(rows, headers, rawCols = []) {
+      const esc = s => (s ?? '').toString().replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+      const thead = `<thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>`;
+      const tbody = `<tbody>${
+        rows.map(r => `<tr>${
+          r.map((c, idx) => `<td>${rawCols.includes(idx) ? (c ?? '') : esc(c)}</td>`).join('')
+        }</tr>`).join('')
+      }</tbody>`;
+      return `<table>${thead}${tbody}</table>`;
+    }
+
+
     function finish(){
       if(finished) return; finished=true; running=false;
       clearAll();
