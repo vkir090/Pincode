@@ -261,21 +261,19 @@ function viewClassic(root){
   }
 }
 
-/************* STEP (Geführt): Repeat → Reverse → Sort (ASC→DESC) *************/
+/************* STEP (Geführt, ohne Zeitdruck): Repeat → Reverse → Sort ASC → Sort DESC *************/
 function viewStep(root){
-  root.appendChild(card(`<h2>🪜 Step (Geführt)</h2>
-    <div class="muted">Drei Stufen, nicht gemischt: <b>Repeat</b> → <b>Reverse</b> → <b>Sort</b> (erste Hälfte <i>ASC</i>, zweite Hälfte <i>DESC</i>). Großzügige Zeiten. <b>Auto-Advance</b> bei korrekter Eingabe.</div>`));
+  root.appendChild(card(`<h2>🪜 Step (Geführt, ohne Zeitdruck)</h2>
+    <div class="muted">Stufenfolge: <b>Repeat</b> → <b>Reverse</b> → <b>Sort ASC</b> → <b>Sort DESC</b>.
+    <br>Die Stufe wechselt <b>nur bei korrekter Eingabe</b>. Es gibt <b>keine</b> Antwort-Deadlines oder Stufen-Timer.
+    <br><b>Auto-Advance</b>: richtige Eingabe springt sofort weiter.</div>`));
 
   const cfg={
-    secRepeat:150, secReverse:180, secSort:210,
     lenMin:3, lenMax:6, allowZero:true, allowRepeats:true,
-    showPerDigit:[1000,1600], answerTimeout:[2000,3000], iti:[300,700]
+    showPerDigit:[900,1500], iti:[200,500]  // reine Präsentationsdelays, keine Deadlines
   };
 
   const panel=card(); panel.appendChild(formRow([
-    numberField('Repeat (s)',30,600,10,cfg.secRepeat,v=>cfg.secRepeat=v),
-    numberField('Reverse (s)',30,600,10,cfg.secReverse,v=>cfg.secReverse=v),
-    numberField('Sort (s)',30,600,10,cfg.secSort,v=>cfg.secSort=v),
     numberField('Länge min',3,8,1,cfg.lenMin,v=>cfg.lenMin=v),
     numberField('Länge max',4,9,1,cfg.lenMax,v=>cfg.lenMax=v),
     btn('Start',()=>run())
@@ -283,23 +281,23 @@ function viewStep(root){
   root.appendChild(panel);
 
   function perDigitMs(){ return rndInt(cfg.showPerDigit[0], cfg.showPerDigit[1]); }
-  function ansTimeoutMs(){ return rndInt(cfg.answerTimeout[0], cfg.answerTimeout[1]); }
   function itiMs(){ return rndInt(cfg.iti[0], cfg.iti[1]); }
   function randLen(){ return rndInt(cfg.lenMin, cfg.lenMax); }
 
   function run(){
+    // Feste, nicht gemischte Reihenfolge – Fortschritt NUR bei korrekter Eingabe
     const stages=[
-      {id:'repeat',  label:'Repeat',  secs:cfg.secRepeat},
-      {id:'reverse', label:'Reverse', secs:cfg.secReverse},
-      {id:'sort',    label:'Sort',    secs:cfg.secSort},
+      {id:'repeat',   label:'Repeat'},
+      {id:'reverse',  label:'Reverse'},
+      {id:'sort-asc', label:'Sort ASC'},
+      {id:'sort-desc',label:'Sort DESC'},
     ];
-    let stageIdx=0, stageEndsAt=0, stageStartAt=0, sortMode='ASC';
+    let stageIdx=0;
 
     const ui=card(); root.appendChild(ui);
     ui.innerHTML=`
       <div class="row" style="justify-content:space-between;align-items:center">
         <span class="pill">Stufe: <b id="stageL">—</b></span>
-        <span class="pill">Zeit (Stufe): <span id="t" class="timer">—</span></span>
         <span class="pill">Score: <b id="sc">0</b></span>
         <span class="pill">Item: <b id="ic">0</b></span>
       </div>
@@ -317,83 +315,80 @@ function viewStep(root){
         <button id="abort" class="btn danger">Abbrechen</button>
       </div>`;
 
-    const el={t:$('#t',ui),sc:$('#sc',ui),ic:$('#ic',ui),cue:$('#cue',ui),stim:$('#stim',ui),
-              a:$('#a',ui),ok:$('#ok',ui),skip:$('#skip',ui),clear:$('#clear',ui),abort:$('#abort',ui), stageL:$('#stageL',ui)};
+    const el={stageL:$('#stageL',ui),sc:$('#sc',ui),ic:$('#ic',ui),cue:$('#cue',ui),stim:$('#stim',ui),
+              a:$('#a',ui),ok:$('#ok',ui),skip:$('#skip',ui),clear:$('#clear',ui),abort:$('#abort',ui)};
 
+    // Session-Stats
     const per=[]; let score=0, correct=0, wrong=0, skipped=0;
     let running=true, finished=false;
-    let state='IDLE', cur=null, qStart=0, currentFail=null;
-    const timers=[]; const setT=(fn,ms)=>{ const id=setTimeout(fn,ms); timers.push(id); return id; };
-    const clearAll=()=>{ while(timers.length) clearTimeout(timers.pop()); };
+    let state='IDLE', cur=null, qStart=0;
 
-    function updateHUD(){ el.sc.textContent=String(score); el.ic.textContent=String(per.length); }
-    function pushRec(r){ per.push(r); if(r.skipped){skipped++;} else if(r.correct){correct++;score+=1;} else {wrong++;} updateHUD(); }
     function stageLabel(){ el.stageL.textContent = stages[stageIdx]?.label || '—'; }
+    function updateHUD(){ el.sc.textContent=String(score); el.ic.textContent=String(per.length); }
 
     function makeItem(){
       const L=randLen(); const base=randDigits(L,cfg.allowZero,cfg.allowRepeats); const baseStr=digitsToStr(base);
-      if(stages[stageIdx].id==='repeat')  return {kind:'repeat',  cue:'REPEAT',  len:L, baseStr, target:baseStr};
-      if(stages[stageIdx].id==='reverse') return {kind:'reverse', cue:'REVERSE', len:L, baseStr, target:digitsToStr([...base].reverse())};
-      if(stages[stageIdx].id==='sort'){
-        // erste Hälfte der Stufe ASC, zweite Hälfte DESC
-        const elapsed = now()-stageStartAt, total=stages[stageIdx].secs*1000;
-        sortMode = (elapsed < total/2) ? 'ASC' : 'DESC';
-        const out=[...base].sort((a,b)=>a-b); if(sortMode==='DESC') out.reverse();
-        return {kind:'sort', cue:`SORT ${sortMode}`, len:L, baseStr, target:digitsToStr(out)};
-      }
+      const st=stages[stageIdx]?.id;
+      if(st==='repeat')   return {kind:'repeat',  cue:'REPEAT',     len:L, baseStr, target:baseStr};
+      if(st==='reverse')  return {kind:'reverse', cue:'REVERSE',    len:L, baseStr, target:digitsToStr([...base].reverse())};
+      if(st==='sort-asc'){ const out=[...base].sort((a,b)=>a-b); return {kind:'sort', cue:'SORT ASC',  len:L, baseStr, target:digitsToStr(out)}; }
+      if(st==='sort-desc'){ const out=[...base].sort((a,b)=>a-b).reverse(); return {kind:'sort', cue:'SORT DESC', len:L, baseStr, target:digitsToStr(out)}; }
       return {kind:'repeat', cue:'REPEAT', len:L, baseStr, target:baseStr};
     }
 
     function nextItem(){
       if(!running) return;
+      stageLabel();
       cur=makeItem();
       el.cue.textContent=cur.cue; el.a.value=''; el.a.maxLength=cur.len; el.a.focus();
+      // anzeigen → maskieren (kein Antwort-Timeout!)
       el.stim.textContent=cur.baseStr.split('').join(' ');
-      setT(()=>{ el.stim.textContent=bullets(cur.len); startAnswer(); }, perDigitMs());
+      setTimeout(()=>{ el.stim.textContent=bullets(cur.len); state='ANSWER'; qStart=now(); }, perDigitMs());
     }
 
-    function startAnswer(){
-      if(!running) return;
-      state='ANSWER'; qStart=now();
-      const deadline=ansTimeoutMs();
-      currentFail=()=>{ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:0, ms:'', len:cur.len, deadline:1}); startITI(); };
-      setT(currentFail, deadline);
+    function flash(ok){
+      el.stim.classList.remove('flash-ok','flash-bad');
+      el.stim.classList.add(ok?'flash-ok':'flash-bad');
+      setTimeout(()=>el.stim.classList.remove('flash-ok','flash-bad'),150);
+    }
+
+    function pushRec(r){
+      per.push(r);
+      if(r.skipped){ skipped++; }
+      else if(r.correct){ correct++; score+=1; }
+      else { wrong++; }
+      updateHUD();
     }
 
     function submit(kind){
       if(!running || state!=='ANSWER') return;
-      if(kind==='skip'){ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:null, ms:'', len:cur.len, skipped:1}); startITI(); return; }
       if(kind==='clear'){ el.a.value=''; el.a.focus(); return; }
-      const user=el.a.value; if(user.length!==cur.len){ el.a.focus(); return; }
-      const ms=Math.round(now()-qStart); const ok=(user===cur.target);
-      pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user, correct:ok?1:0, ms, len:cur.len});
-      startITI();
-    }
-
-    function startITI(){ currentFail=null; state='ITI'; setT(()=>{ nextItem(); }, rndInt(cfg.iti[0], cfg.iti[1])); }
-
-    function advanceStage(){
-      // offene Aufgabe als falsch werten
-      if(typeof currentFail==='function') currentFail();
-      stageIdx++;
-      if(stageIdx>=stages.length){ return finish(); }
-      // neue Stage
-      stageStartAt=now();
-      stageEndsAt=stageStartAt + stages[stageIdx].secs*1000;
-      stageLabel();
-      nextItem();
+      if(kind==='skip'){
+        pushRec({kind:cur.kind, cue:cur.cue, code:cur.baseStr, target:cur.target, user:'', correct:null, len:cur.len, ms:''});
+        return setTimeout(nextItem, itiMs()); // gleiche Stufe, neues Item
+      }
+      const user=el.a.value;
+      if(user.length!==cur.len){ el.a.focus(); return; }
+      const ms=Math.round(now()-qStart);
+      const ok=(user===cur.target);
+      flash(ok);
+      pushRec({kind:cur.kind, cue:cur.cue, code:cur.baseStr, target:cur.target, user, correct:ok?1:0, len:cur.len, ms});
+      if(ok){
+        stageIdx++;                           // <<< Stufenwechsel NUR bei korrekter Eingabe
+        if(stageIdx>=stages.length) return finish();
+      }
+      setTimeout(nextItem, itiMs());
     }
 
     function finish(){
-      if(finished) return; finished=true;
-      running=false; clearAll();
+      if(finished) return; finished=true; running=false;
       const stats={correct, wrong, skipped, score};
-      pushSession({module:'pc_step', stats, settings:{...cfg}, perQuestion:per});
+      pushSession({module:'pc_step', stats, settings:{...cfg, mode:'no-time'}, perQuestion:per});
       const rows=[["#","kind","cue","code","target","user","ok","ms"]];
       per.forEach((x,i)=>rows.push([i+1,x.kind,x.cue||'',x.code||'',x.target||'',x.user??'',x.correct==null?'':(x.correct?1:0),x.ms||'']));
       const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
       const txt=per.map((x,i)=>`${i+1}. ${x.kind} | ${x.cue||''} | base=${x.code||''} | targ=${x.target||''} | user=${x.user??''} | ok=${x.correct==null?'':(x.correct?1:0)} | ms=${x.ms||''}`).join('\n');
-      ui.innerHTML=`<h3>Ergebnis (Step)</h3>
+      ui.innerHTML=`<h3>Ergebnis (Step, ohne Zeitdruck)</h3>
         <div class="row"><span class="pill">Richtig: <b class="ok">${stats.correct}</b></span>
         <span class="pill">Falsch: <b class="bad">${stats.wrong}</b></span>
         <span class="pill">Skips: <b class="warn">${stats.skipped}</b></span>
@@ -407,9 +402,14 @@ function viewStep(root){
     }
 
     // Controls
-    el.ok.onclick=()=>submit('ok'); el.skip.onclick=()=>submit('skip'); el.clear.onclick=()=>submit('clear');
-    el.a.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submit('ok'); } else if(e.key===' '){ e.preventDefault(); submit('skip'); } });
-    // AUTO-ADVANCE (nur Ziffern, Länge begrenzen)
+    el.ok.onclick = ()=>submit('ok');
+    el.skip.onclick = ()=>submit('skip');
+    el.clear.onclick= ()=>submit('clear');
+    el.a.addEventListener('keydown',e=>{
+      if(e.key==='Enter'){ e.preventDefault(); submit('ok'); }
+      else if(e.key===' '){ e.preventDefault(); submit('skip'); }
+    });
+    // AUTO-ADVANCE: sofort submitten, wenn exakt richtig
     el.a.addEventListener('input',()=>{
       if(state!=='ANSWER' || !cur) return;
       const v=el.a.value.replace(/\D/g,'').slice(0,cur.len);
@@ -418,21 +418,7 @@ function viewStep(root){
     });
     el.abort.onclick=()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; finish(); } };
 
-    // Stage-Timer Loop (hartes Ende jeder Stufe)
-    function startStage(){
-      stageStartAt=now();
-      stageEndsAt=stageStartAt + stages[stageIdx].secs*1000;
-      stageLabel();
-      (function loop(){
-        if(!running || finished) return;
-        const left = Math.max(0, stageEndsAt - now());
-        el.t.textContent=(left/1000).toFixed(1)+'s';
-        if(left<=0){ return advanceStage(); }
-        requestAnimationFrame(loop);
-      })();
-    }
-
-    startStage();
+    // los
     nextItem();
   }
 }
