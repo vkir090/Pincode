@@ -107,7 +107,7 @@ const RULE_LABEL={
 /************* App-Shell *************/
 const tabs=[
   {id:'classic', label:'Classic', view:viewClassic},
-  {id:'step',    label:'Step (Geführt)', view:viewStep},    /* NEW */
+  {id:'step',    label:'Step (Geführt)', view:viewStep},
   {id:'trainer', label:'Trainer (Step-Up)', view:viewTrainer},
   {id:'pro',     label:'Pro (Mixed)', view:viewPro},
   {id:'stats',   label:'Statistik', view:viewStats},
@@ -265,12 +265,10 @@ function viewClassic(root){
 function viewStep(root){
   root.appendChild(card(`<h2>🪜 Step (Geführt, ohne Zeitdruck)</h2>
     <div class="muted">Stufenfolge: <b>Repeat</b> → <b>Reverse</b> → <b>Sort ASC</b> → <b>Sort DESC</b>.
-    Stufenwechsel <b>nur bei korrekter Eingabe</b>. Kein Antwort-Timer. Auto-Advance: richtige Eingabe springt sofort weiter.</div>`));
+    Stufenwechsel <b>nur bei korrekter Eingabe</b>. Kein Antwort-Timer. Auto-Advance nur bei exakt richtiger Eingabe.</div>`));
 
-  const cfg={
-    lenMin:3, lenMax:6, allowZero:true, allowRepeats:true,
-    showPerDigit:[900,1500], iti:[200,500] // nur Anzeige/ITI, keine Deadlines
-  };
+  const cfg={ lenMin:3, lenMax:6, allowZero:true, allowRepeats:true,
+              showPerDigit:[900,1500], iti:[200,500] };
 
   const panel=card(); panel.appendChild(formRow([
     numberField('Länge min',3,8,1,cfg.lenMin,v=>cfg.lenMin=v),
@@ -313,20 +311,17 @@ function viewStep(root){
         <button id="abort" class="btn danger">Abbrechen</button>
       </div>`;
 
-    const el={
-      stageL:$('#stageL',ui), sc:$('#sc',ui), ic:$('#ic',ui),
-      cue:$('#cue',ui), stim:$('#stim',ui),
-      a:$('#a',ui), ok:$('#ok',ui), skip:$('#skip',ui), clear:$('#clear',ui), abort:$('#abort',ui)
-    };
+    const el={ stageL:$('#stageL',ui), sc:$('#sc',ui), ic:$('#ic',ui),
+               cue:$('#cue',ui), stim:$('#stim',ui),
+               a:$('#a',ui), ok:$('#ok',ui), skip:$('#skip',ui), clear:$('#clear',ui), abort:$('#abort',ui) };
 
-    // State & Stats
+    // Stats & State
     const per=[]; let score=0, correct=0, wrong=0, skipped=0;
     let running=true, finished=false;
     let state='IDLE', cur=null, qStart=0, answered=false;
 
-    // Timer-Management (Race-Condition Fix)
-    const timers=[];
-    const setT=(fn,ms)=>{ const id=setTimeout(fn,ms); timers.push(id); return id; };
+    // Timer handling
+    const timers=[]; const setT=(fn,ms)=>{ const id=setTimeout(fn,ms); timers.push(id); return id; };
     const clearAll=()=>{ while(timers.length) clearTimeout(timers.pop()); };
 
     const stageLabel=()=>{ el.stageL.textContent=stages[stageIdx]?.label||'—'; };
@@ -344,14 +339,13 @@ function viewStep(root){
 
     function nextItem(){
       if(!running) return;
-      clearAll();                 // <<< stoppe alte Maskierungs-/ITI-Timer
-      answered=false;             // <<< neuer Trial, Doppel-Submit sperren
+      clearAll();
+      answered=false;
       state='SHOW';
       stageLabel();
       cur=makeItem();
       el.cue.textContent=cur.cue;
       el.a.value=''; el.a.maxLength=cur.len; el.a.focus();
-
       el.stim.textContent=cur.baseStr.split('').join(' ');
       setT(()=>{ el.stim.textContent=bullets(cur.len); state='ANSWER'; qStart=now(); }, perDigitMs());
     }
@@ -373,40 +367,28 @@ function viewStep(root){
     function queueNext(){ state='ITI'; setT(nextItem, itiMs()); }
 
     function submit(kind){
-      if(!running || state!=='ANSWER' || answered) return; // <<< Doppel-Submit-Schutz
+      if(!running || state!=='ANSWER' || answered) return;
       if(kind==='clear'){ el.a.value=''; el.a.focus(); return; }
       if(kind==='skip'){
         answered=true;
         pushRec({kind:cur.kind, cue:cur.cue, code:cur.baseStr, target:cur.target, user:'', correct:null, len:cur.len, ms:''});
-        return queueNext(); // gleiche Stufe
+        return queueNext(); // bleibt in derselben Stufe
       }
       const user=el.a.value;
       if(user.length!==cur.len){ el.a.focus(); return; }
 
-      answered=true; // ab hier keine zweite Auswertung zulassen
+      answered=true;
       const ms=Math.round(now()-qStart);
       const ok=(user===cur.target);
       flash(ok);
       pushRec({kind:cur.kind, cue:cur.cue, code:cur.baseStr, target:cur.target, user, correct:ok?1:0, len:cur.len, ms});
 
       if(ok){
-        stageIdx++;                 // <<< Stufenwechsel nur bei korrekt
+        stageIdx++;                 // nur bei korrekt weiter
         if(stageIdx>=stages.length) return finish();
       }
-      queueNext();
+      queueNext();                   // sonst neue Aufgabe, gleiche Stufe
     }
-
-    function table(rows, headers, rawCols = []) {
-      const esc = s => (s ?? '').toString().replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-      const thead = `<thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>`;
-      const tbody = `<tbody>${
-        rows.map(r => `<tr>${
-          r.map((c, idx) => `<td>${rawCols.includes(idx) ? (c ?? '') : esc(c)}</td>`).join('')
-        }</tr>`).join('')
-      }</tbody>`;
-      return `<table>${thead}${tbody}</table>`;
-    }
-
 
     function finish(){
       if(finished) return; finished=true; running=false;
@@ -438,7 +420,6 @@ function viewStep(root){
       if(e.key==='Enter'){ e.preventDefault(); submit('ok'); }
       else if(e.key===' '){ e.preventDefault(); submit('skip'); }
     });
-    // Auto-Advance — nur wenn exakt korrekt; answered-Lock verhindert Doppelzählung
     el.a.addEventListener('input',()=>{
       if(state!=='ANSWER' || !cur || answered) return;
       const v=el.a.value.replace(/\D/g,'').slice(0,cur.len);
@@ -450,7 +431,7 @@ function viewStep(root){
     nextItem();
   }
 }
-  
+
 /************* TRAINER (Step-Up) *************/
 function viewTrainer(root){
   root.appendChild(card(`<h2>🧱 Trainer (Step-Up)</h2>
@@ -578,7 +559,6 @@ function viewTrainer(root){
 
     el.ok.onclick=()=>submit('ok'); el.skip.onclick=()=>submit('skip'); el.clear.onclick=()=>submit('clear');
     el.a.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submit('ok'); } else if(e.key===' '){ e.preventDefault(); submit('skip'); } });
-    // AUTO-ADVANCE
     el.a.addEventListener('input',()=>{
       if(state!=='ANSWER' || !cur) return;
       const v=el.a.value.replace(/\D/g,'').slice(0,cur.len);
@@ -814,7 +794,7 @@ function viewPro(root){
                      resp:(resp==='Y'?'Y':'N'), correct:ok?1:0, ms:rt, cue:'STERNBERG'});
             k++; setT(step, itiMs());
           }
-          currentFail=()=>done('Z');  // Zeit überschritten -> falsch
+          currentFail=()=>done('Z');
           setT(currentFail, deadline);
           const key=(e)=>{ if(e.key==='Enter') done('Y'); else if(e.key===' ') { e.preventDefault(); done('N'); } };
           addKey(key);
@@ -843,7 +823,7 @@ function viewPro(root){
           pushRec({kind:'nback', n:it.n, pos:k+1, digit:it.stream[k], target:isTarget?1:0, resp:hit?1:0, correct:ok?1:0, ms:rt, cue:`${it.n}-BACK`});
           k++; setT(step, 100);
         }
-        currentFail=()=>done(false); // keine Reaktion = Nein
+        currentFail=()=>done(false);
         setT(currentFail, deadline);
         const key=(e)=>{ if(e.key==='Enter') done(true); else if(e.key===' ') { e.preventDefault(); done(false); } };
         addKey(key);
@@ -857,7 +837,6 @@ function viewPro(root){
     el.skip.onclick = ()=>submitText('skip');
     el.clear.onclick = ()=>submitText('clear');
     el.a.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submitText('ok'); } else if(e.key===' '){ e.preventDefault(); submitText('skip'); } });
-    // AUTO-ADVANCE (nur Text-Modus)
     el.a.addEventListener('input',()=>{
       if(state!=='ANSWER' || !cur || el.ans.style.display==='none') return;
       const v=el.a.value.replace(/\D/g,'').slice(0,cur.len);
@@ -972,6 +951,18 @@ function selectField(label, opts, onCh, val){
   const w=document.createElement('div'); const id='s'+Math.random().toString(36).slice(2);
   w.innerHTML=`<label for="${id}">${label}</label><select id="${id}">${opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>`;
   const el=$('select',w); el.value=val; el.addEventListener('change',e=>onCh(e.target.value)); return w;
+}
+
+/* GLOBAL table()-Helper (für alle Views/Ergebnisse/Statistik) */
+function table(rows, headers, rawCols = []) {
+  const esc = s => (s ?? '').toString().replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+  const thead = `<thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>`;
+  const tbody = `<tbody>${
+    rows.map(r => `<tr>${
+      r.map((c, idx) => `<td>${rawCols.includes(idx) ? (c ?? '') : esc(c)}</td>`).join('')
+    }</tr>`).join('')
+  }</tbody>`;
+  return `<table>${thead}${tbody}</table>`;
 }
 
 /* Boot */
