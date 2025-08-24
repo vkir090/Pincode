@@ -107,10 +107,11 @@ const RULE_LABEL={
 /************* App-Shell *************/
 const tabs=[
   {id:'classic', label:'Classic', view:viewClassic},
+  {id:'step',    label:'Step (Geführt)', view:viewStep},    /* NEW */
   {id:'trainer', label:'Trainer (Step-Up)', view:viewTrainer},
-  {id:'pro', label:'Pro (Mixed)', view:viewPro},
-  {id:'stats', label:'Statistik', view:viewStats},
-  {id:'settings', label:'Einstellungen', view:viewSettings},
+  {id:'pro',     label:'Pro (Mixed)', view:viewPro},
+  {id:'stats',   label:'Statistik', view:viewStats},
+  {id:'settings',label:'Einstellungen', view:viewSettings},
 ];
 let currentTab=localStorage.getItem('pc_tab3')||'classic';
 function renderTabs(){ const nav=$('#tabs'); nav.innerHTML=''; tabs.forEach(t=>{ const b=document.createElement('button'); b.textContent=t.label; b.className=currentTab===t.id?'active':''; b.onclick=()=>{currentTab=t.id; localStorage.setItem('pc_tab3',currentTab); render();}; nav.appendChild(b);});}
@@ -183,7 +184,7 @@ function viewClassic(root){
     let tStart=0, paused=false, pauseT=0, tPause=0, running=true;
     let qStart=0, qPaused=0, qPauseStart=0;
     let hideTimer=null;
-    let trialActive=false; // <- für Deadline-Penalty
+    let trialActive=false;
     let finished=false;
 
     function focusInput(){ el.a.focus(); const pos=el.a.value.length; el.a.setSelectionRange(pos,pos); }
@@ -195,7 +196,7 @@ function viewClassic(root){
       let tNow=performance.now(); if(paused) tNow=tPause;
       const used=tNow-tStart-pauseT, left=Math.max(0, cfg.sec*1000-used);
       el.t.textContent=(left/1000).toFixed(1)+'s';
-      if(left<=0){ endRound(true); return; }  // true = durch Zeitablauf
+      if(left<=0){ endRound(true); return; }
       requestAnimationFrame(tick);
     }
     function newCode(){
@@ -220,7 +221,7 @@ function viewClassic(root){
       focusInput();
     }
     function endRound(byTimeout=false){
-      if(byTimeout && trialActive){ // offene Aufgabe als falsch werten
+      if(byTimeout && trialActive){
         per.push({round:round+1, kind:'classic', code:cur, user:'', correct:0, ms:'', deadline:1});
         wrong++; trialActive=false;
       }
@@ -260,10 +261,186 @@ function viewClassic(root){
   }
 }
 
+/************* STEP (Geführt): Repeat → Reverse → Sort (ASC→DESC) *************/
+function viewStep(root){
+  root.appendChild(card(`<h2>🪜 Step (Geführt)</h2>
+    <div class="muted">Drei Stufen, nicht gemischt: <b>Repeat</b> → <b>Reverse</b> → <b>Sort</b> (erste Hälfte <i>ASC</i>, zweite Hälfte <i>DESC</i>). Großzügige Zeiten. <b>Auto-Advance</b> bei korrekter Eingabe.</div>`));
+
+  const cfg={
+    secRepeat:150, secReverse:180, secSort:210,
+    lenMin:3, lenMax:6, allowZero:true, allowRepeats:true,
+    showPerDigit:[1000,1600], answerTimeout:[2000,3000], iti:[300,700]
+  };
+
+  const panel=card(); panel.appendChild(formRow([
+    numberField('Repeat (s)',30,600,10,cfg.secRepeat,v=>cfg.secRepeat=v),
+    numberField('Reverse (s)',30,600,10,cfg.secReverse,v=>cfg.secReverse=v),
+    numberField('Sort (s)',30,600,10,cfg.secSort,v=>cfg.secSort=v),
+    numberField('Länge min',3,8,1,cfg.lenMin,v=>cfg.lenMin=v),
+    numberField('Länge max',4,9,1,cfg.lenMax,v=>cfg.lenMax=v),
+    btn('Start',()=>run())
+  ]));
+  root.appendChild(panel);
+
+  function perDigitMs(){ return rndInt(cfg.showPerDigit[0], cfg.showPerDigit[1]); }
+  function ansTimeoutMs(){ return rndInt(cfg.answerTimeout[0], cfg.answerTimeout[1]); }
+  function itiMs(){ return rndInt(cfg.iti[0], cfg.iti[1]); }
+  function randLen(){ return rndInt(cfg.lenMin, cfg.lenMax); }
+
+  function run(){
+    const stages=[
+      {id:'repeat',  label:'Repeat',  secs:cfg.secRepeat},
+      {id:'reverse', label:'Reverse', secs:cfg.secReverse},
+      {id:'sort',    label:'Sort',    secs:cfg.secSort},
+    ];
+    let stageIdx=0, stageEndsAt=0, stageStartAt=0, sortMode='ASC';
+
+    const ui=card(); root.appendChild(ui);
+    ui.innerHTML=`
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <span class="pill">Stufe: <b id="stageL">—</b></span>
+        <span class="pill">Zeit (Stufe): <span id="t" class="timer">—</span></span>
+        <span class="pill">Score: <b id="sc">0</b></span>
+        <span class="pill">Item: <b id="ic">0</b></span>
+      </div>
+      <div class="center" style="margin-top:6px">
+        <div id="cue" class="cue">—</div>
+        <div id="stim" class="stim">•</div>
+      </div>
+      <div id="answerBlock" class="row center" style="justify-content:center;gap:10px;margin-top:6px">
+        <input id="a" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Antwort…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:280px">
+        <button id="ok" class="btn huge">OK</button>
+        <button id="skip" class="btn ghost huge">Skip</button>
+        <button id="clear" class="btn ghost huge">Clear</button>
+      </div>
+      <div class="row center" style="justify-content:center;gap:10px;margin-top:6px">
+        <button id="abort" class="btn danger">Abbrechen</button>
+      </div>`;
+
+    const el={t:$('#t',ui),sc:$('#sc',ui),ic:$('#ic',ui),cue:$('#cue',ui),stim:$('#stim',ui),
+              a:$('#a',ui),ok:$('#ok',ui),skip:$('#skip',ui),clear:$('#clear',ui),abort:$('#abort',ui), stageL:$('#stageL',ui)};
+
+    const per=[]; let score=0, correct=0, wrong=0, skipped=0;
+    let running=true, finished=false;
+    let state='IDLE', cur=null, qStart=0, currentFail=null;
+    const timers=[]; const setT=(fn,ms)=>{ const id=setTimeout(fn,ms); timers.push(id); return id; };
+    const clearAll=()=>{ while(timers.length) clearTimeout(timers.pop()); };
+
+    function updateHUD(){ el.sc.textContent=String(score); el.ic.textContent=String(per.length); }
+    function pushRec(r){ per.push(r); if(r.skipped){skipped++;} else if(r.correct){correct++;score+=1;} else {wrong++;} updateHUD(); }
+    function stageLabel(){ el.stageL.textContent = stages[stageIdx]?.label || '—'; }
+
+    function makeItem(){
+      const L=randLen(); const base=randDigits(L,cfg.allowZero,cfg.allowRepeats); const baseStr=digitsToStr(base);
+      if(stages[stageIdx].id==='repeat')  return {kind:'repeat',  cue:'REPEAT',  len:L, baseStr, target:baseStr};
+      if(stages[stageIdx].id==='reverse') return {kind:'reverse', cue:'REVERSE', len:L, baseStr, target:digitsToStr([...base].reverse())};
+      if(stages[stageIdx].id==='sort'){
+        // erste Hälfte der Stufe ASC, zweite Hälfte DESC
+        const elapsed = now()-stageStartAt, total=stages[stageIdx].secs*1000;
+        sortMode = (elapsed < total/2) ? 'ASC' : 'DESC';
+        const out=[...base].sort((a,b)=>a-b); if(sortMode==='DESC') out.reverse();
+        return {kind:'sort', cue:`SORT ${sortMode}`, len:L, baseStr, target:digitsToStr(out)};
+      }
+      return {kind:'repeat', cue:'REPEAT', len:L, baseStr, target:baseStr};
+    }
+
+    function nextItem(){
+      if(!running) return;
+      cur=makeItem();
+      el.cue.textContent=cur.cue; el.a.value=''; el.a.maxLength=cur.len; el.a.focus();
+      el.stim.textContent=cur.baseStr.split('').join(' ');
+      setT(()=>{ el.stim.textContent=bullets(cur.len); startAnswer(); }, perDigitMs());
+    }
+
+    function startAnswer(){
+      if(!running) return;
+      state='ANSWER'; qStart=now();
+      const deadline=ansTimeoutMs();
+      currentFail=()=>{ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:0, ms:'', len:cur.len, deadline:1}); startITI(); };
+      setT(currentFail, deadline);
+    }
+
+    function submit(kind){
+      if(!running || state!=='ANSWER') return;
+      if(kind==='skip'){ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:null, ms:'', len:cur.len, skipped:1}); startITI(); return; }
+      if(kind==='clear'){ el.a.value=''; el.a.focus(); return; }
+      const user=el.a.value; if(user.length!==cur.len){ el.a.focus(); return; }
+      const ms=Math.round(now()-qStart); const ok=(user===cur.target);
+      pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user, correct:ok?1:0, ms, len:cur.len});
+      startITI();
+    }
+
+    function startITI(){ currentFail=null; state='ITI'; setT(()=>{ nextItem(); }, rndInt(cfg.iti[0], cfg.iti[1])); }
+
+    function advanceStage(){
+      // offene Aufgabe als falsch werten
+      if(typeof currentFail==='function') currentFail();
+      stageIdx++;
+      if(stageIdx>=stages.length){ return finish(); }
+      // neue Stage
+      stageStartAt=now();
+      stageEndsAt=stageStartAt + stages[stageIdx].secs*1000;
+      stageLabel();
+      nextItem();
+    }
+
+    function finish(){
+      if(finished) return; finished=true;
+      running=false; clearAll();
+      const stats={correct, wrong, skipped, score};
+      pushSession({module:'pc_step', stats, settings:{...cfg}, perQuestion:per});
+      const rows=[["#","kind","cue","code","target","user","ok","ms"]];
+      per.forEach((x,i)=>rows.push([i+1,x.kind,x.cue||'',x.code||'',x.target||'',x.user??'',x.correct==null?'':(x.correct?1:0),x.ms||'']));
+      const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+      const txt=per.map((x,i)=>`${i+1}. ${x.kind} | ${x.cue||''} | base=${x.code||''} | targ=${x.target||''} | user=${x.user??''} | ok=${x.correct==null?'':(x.correct?1:0)} | ms=${x.ms||''}`).join('\n');
+      ui.innerHTML=`<h3>Ergebnis (Step)</h3>
+        <div class="row"><span class="pill">Richtig: <b class="ok">${stats.correct}</b></span>
+        <span class="pill">Falsch: <b class="bad">${stats.wrong}</b></span>
+        <span class="pill">Skips: <b class="warn">${stats.skipped}</b></span>
+        <span class="pill">Score: <b>${stats.score}</b></span></div>
+        <div class="row" style="margin-top:8px"><button class="btn" id="dlCsv">Download CSV</button>
+        <button class="btn ghost" id="dlTxt">Download TXT</button></div>
+        ${table(per.slice(-200).map((x,i)=>[i+1,x.kind,x.cue||'',x.code||'—',x.target||'—',x.user??'—',x.correct==null?'⏭':(x.correct? '✅':'❌'),x.ms? (x.ms/1000).toFixed(2)+'s':'']),['#','Typ','Cue','Basis','Ziel','Antwort','OK','Zeit'])}`;
+      $('#dlCsv',ui).onclick=()=>dl('pincode_step_'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv',csv,'text/csv');
+      $('#dlTxt',ui).onclick=()=>dl('pincode_step_'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt',txt,'text/plain');
+      render();
+    }
+
+    // Controls
+    el.ok.onclick=()=>submit('ok'); el.skip.onclick=()=>submit('skip'); el.clear.onclick=()=>submit('clear');
+    el.a.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submit('ok'); } else if(e.key===' '){ e.preventDefault(); submit('skip'); } });
+    // AUTO-ADVANCE (nur Ziffern, Länge begrenzen)
+    el.a.addEventListener('input',()=>{
+      if(state!=='ANSWER' || !cur) return;
+      const v=el.a.value.replace(/\D/g,'').slice(0,cur.len);
+      if(el.a.value!==v) el.a.value=v;
+      if(v.length===cur.len && v===cur.target) submit('ok');
+    });
+    el.abort.onclick=()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; finish(); } };
+
+    // Stage-Timer Loop (hartes Ende jeder Stufe)
+    function startStage(){
+      stageStartAt=now();
+      stageEndsAt=stageStartAt + stages[stageIdx].secs*1000;
+      stageLabel();
+      (function loop(){
+        if(!running || finished) return;
+        const left = Math.max(0, stageEndsAt - now());
+        el.t.textContent=(left/1000).toFixed(1)+'s';
+        if(left<=0){ return advanceStage(); }
+        requestAnimationFrame(loop);
+      })();
+    }
+
+    startStage();
+    nextItem();
+  }
+}
+
 /************* TRAINER (Step-Up) *************/
 function viewTrainer(root){
   root.appendChild(card(`<h2>🧱 Trainer (Step-Up)</h2>
-    <div class="muted">Zwischenstufe: Recall, Reverse, Sort (ASC), Rule (+1 oder 9−d). Anzeige → Maskierung → Antwort. Skip legt Item ans Ende.</div>`));
+    <div class="muted">Zwischenstufe: Recall, Reverse, Sort (ASC), Rule (+1 oder 9−d). Anzeige → Maskierung → Antwort. Skip legt Item ans Ende. <b>Auto-Advance</b> bei korrekter Eingabe.</div>`));
 
   const cfg={
     seconds:240,
@@ -334,7 +511,6 @@ function viewTrainer(root){
     function nextItem(){
       if(!running) return;
       cur=makeItem(); el.cue.textContent=cur.cue; el.a.value=''; el.a.maxLength=cur.len; el.a.focus();
-      // Anzeige + Maskierung
       el.stim.textContent=cur.baseStr.split('').join(' ');
       setT(()=>{ el.stim.textContent=bullets(cur.len); startAnswer(); }, perDigitMs());
     }
@@ -346,18 +522,14 @@ function viewTrainer(root){
     }
     function submit(kind){
       if(!running || state!=='ANSWER') return;
-      if(kind==='skip'){ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:null, ms:'', len:cur.len, skipped:1}); startITI(true); return; }
+      if(kind==='skip'){ pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user:'', correct:null, ms:'', len:cur.len, skipped:1}); startITI(); return; }
       if(kind==='clear'){ el.a.value=''; el.a.focus(); return; }
       const user=el.a.value; if(user.length!==cur.len){ el.a.focus(); return; }
       const ms=Math.round(now()-qStart); const ok=(user===cur.target);
       pushRec({kind:cur.kind, code:cur.baseStr, target:cur.target, user, correct:ok?1:0, ms, len:cur.len});
       startITI();
     }
-    function startITI(skipQueue=false){
-      currentFail=null;
-      state='ITI';
-      setT(()=>{ if(skipQueue) nextItem(); else nextItem(); }, itiMs());
-    }
+    function startITI(){ currentFail=null; state='ITI'; setT(()=>{ nextItem(); }, itiMs()); }
 
     function finish(){
       if(finished) return; finished=true;
@@ -384,28 +556,31 @@ function viewTrainer(root){
     const t0=performance.now();
     (function loop(){
       if(!running) return;
-      const used=performance.now()-t0, left=Math.max(0, cfg.seconds*1000-used);
+      const used=performance.now()-t0, left=Math.max(0, totalMs-used);
       el.t.textContent=(left/1000).toFixed(1)+'s';
-      if(left<=0){
-        // offene Aufgabe als falsch
-        if(typeof currentFail==='function') currentFail();
-        return finish();
-      }
+      if(left<=0){ if(typeof currentFail==='function') currentFail(); return finish(); }
       requestAnimationFrame(loop);
     })();
 
     el.ok.onclick=()=>submit('ok'); el.skip.onclick=()=>submit('skip'); el.clear.onclick=()=>submit('clear');
     el.a.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submit('ok'); } else if(e.key===' '){ e.preventDefault(); submit('skip'); } });
+    // AUTO-ADVANCE
+    el.a.addEventListener('input',()=>{
+      if(state!=='ANSWER' || !cur) return;
+      const v=el.a.value.replace(/\D/g,'').slice(0,cur.len);
+      if(el.a.value!==v) el.a.value=v;
+      if(v.length===cur.len && v===cur.target) submit('ok');
+    });
     el.abort.onclick=()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; finish(); } };
 
     nextItem();
   }
 }
 
-/************* PRO (Mixed, mit robustem Timeout-Ende) *************/
+/************* PRO (Mixed, robustes Timeout-Ende) *************/
 function viewPro(root){
   root.appendChild(card(`<h2>🧠 Pro PIN (Mixed)</h2>
-    <div class="muted">Recall/Reverse/Sort/Rule/Rule-Switch/Sternberg/n-back/Interferenz. Skips → ans Ende. Offene Trials werden bei Zeitablauf als falsch gewertet.</div>`));
+    <div class="muted">Recall/Reverse/Sort/Rule/Rule-Switch/Sternberg/n-back/Interferenz. Skips → ans Ende. Offene Trials werden bei Zeitablauf als falsch gewertet. <b>Auto-Advance</b> bei korrekter Eingabe.</div>`));
 
   const cfg={
     seconds:360,
@@ -668,11 +843,17 @@ function viewPro(root){
     el.skip.onclick = ()=>submitText('skip');
     el.clear.onclick = ()=>submitText('clear');
     el.a.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); submitText('ok'); } else if(e.key===' '){ e.preventDefault(); submitText('skip'); } });
+    // AUTO-ADVANCE (nur Text-Modus)
+    el.a.addEventListener('input',()=>{
+      if(state!=='ANSWER' || !cur || el.ans.style.display==='none') return;
+      const v=el.a.value.replace(/\D/g,'').slice(0,cur.len);
+      if(el.a.value!==v) el.a.value=v;
+      if(v.length===cur.len && v===cur.target) submitText('ok');
+    });
     el.abort.onclick=()=>{ if(confirm('Ohne Speichern beenden?')){ running=false; forceEnd(); } };
 
     function forceEnd(){
       if(!running || finished) return;
-      // offene Aufgabe als falsch
       if(typeof currentFail==='function'){ try{ currentFail(); }catch{} }
       finish();
     }
@@ -730,8 +911,8 @@ function viewPro(root){
 
 /************* Statistik *************/
 function viewStats(root){
-  root.appendChild(card(`<h2>📊 Statistik</h2><div class="muted">Classic, Trainer & Pro zusammengefasst. Skips zählen nicht als falsch.</div>`));
-  const arr=DB.sessions.filter(s=>s.module==='pc_classic'||s.module==='pc_trainer'||s.module==='pc_pro');
+  root.appendChild(card(`<h2>📊 Statistik</h2><div class="muted">Classic, Step, Trainer & Pro. Skips zählen nicht als falsch.</div>`));
+  const arr=DB.sessions.filter(s=>['pc_classic','pc_step','pc_trainer','pc_pro'].includes(s.module));
   const sum=f=>arr.reduce((a,x)=>a+(f(x)||0),0);
   const el=card(`<div class="row">
       <span class="pill">Sessions: <b>${arr.length}</b></span>
@@ -759,7 +940,7 @@ function viewSettings(root){
   root.appendChild(card(`<h2>⚙️ Einstellungen</h2><div class="muted">Datenpflege.</div>`));
   const box=card(); box.appendChild(formRow([
     btn("Nur Highscore löschen",()=>{ delete DB.highscores.pc; save(DBKEY,DB); alert("Highscore gelöscht."); },'btn ghost'),
-    btn("Alle Pincode-Sessions löschen",()=>{ DB.sessions=DB.sessions.filter(s=>!(s.module==='pc_classic'||s.module==='pc_trainer'||s.module==='pc_pro')); save(DBKEY,DB); alert("Sessions gelöscht."); render(); },'btn danger'),
+    btn("Alle Pincode-Sessions löschen",()=>{ DB.sessions=DB.sessions.filter(s=>!['pc_classic','pc_step','pc_trainer','pc_pro'].includes(s.module)); save(DBKEY,DB); alert("Sessions gelöscht."); render(); },'btn danger'),
   ]));
   root.appendChild(box);
 }
