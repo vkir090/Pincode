@@ -383,11 +383,11 @@ function viewStep(root){
       flash(ok);
       pushRec({kind:cur.kind, cue:cur.cue, code:cur.baseStr, target:cur.target, user, correct:ok?1:0, len:cur.len, ms});
 
-      if(ok){
-        stageIdx++;                 // nur bei korrekt weiter
-        if(stageIdx>=stages.length) return finish();
+      if (ok) {
+        // nur bei korrekter Eingabe die Stufe erhöhen und zyklisch weiterschalten
+        stageIdx = (stageIdx + 1) % stages.length;
       }
-      queueNext();                   // sonst neue Aufgabe, gleiche Stufe
+      queueNext();  // sonst neue Aufgabe in derselben (oder nächsten) Stufe
     }
 
     function finish(){
